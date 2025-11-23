@@ -167,5 +167,81 @@ pip install git+https://github.com/lapis42/srtgo -U
    돌아가기
 ```
 
+## Troubleshooting
+
+### ImportError: attempted relative import with no known parent package
+
+이 오류는 srtgo를 pip로 설치하지 않고 직접 실행하려고 할 때 발생합니다.
+
+**해결 방법:**
+
+1. **올바른 설치 방법** (권장):
+```bash
+pip install srtgo -U
+srtgo
+```
+
+2. **개발 모드로 설치** (소스코드에서):
+```bash
+# 프로젝트 루트 디렉토리에서
+pip install -e .
+srtgo
+```
+
+3. **직접 실행하지 마세요:**
+```bash
+# ❌ 잘못된 방법
+python srtgo/srtgo.py
+
+# ✅ 올바른 방법
+pip install -e .
+srtgo
+```
+
+### SSL Certificate Error (curl_cffi)
+
+Windows 환경에서 SSL 인증서 오류가 발생하는 경우:
+
+```
+curl.CurlError: Failed to perform, curl: (60) SSL certificate problem: unable to get local issuer certificate
+```
+
+**해결 방법:**
+
+1. **CA 인증서 업데이트:**
+```bash
+pip install --upgrade certifi
+```
+
+2. **환경 변수 설정** (임시 해결):
+```bash
+# Windows PowerShell
+$env:CURL_CA_BUNDLE=""
+
+# Windows CMD
+set CURL_CA_BUNDLE=
+
+# Linux/Mac
+export CURL_CA_BUNDLE=""
+```
+
+3. **패키지 재설치:**
+```bash
+pip uninstall srtgo
+pip install srtgo -U --no-cache-dir
+```
+
+### 의존성 설치 문제
+
+requirements.txt를 사용한 수동 설치:
+
+```bash
+# 런타임 의존성만 설치
+pip install -r requirements.txt
+
+# 개발 의존성도 함께 설치
+pip install -r requirements-dev.txt
+```
+
 ## Acknowledgments
 - This project includes code from [SRT](https://github.com/ryanking13/SRT) by ryanking13, licensed under the MIT License, and [korail2](https://github.com/carpedm20/korail2) by carpedm20, licensed under the BSD License.

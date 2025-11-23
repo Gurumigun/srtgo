@@ -243,5 +243,44 @@ pip install -r requirements.txt
 pip install -r requirements-dev.txt
 ```
 
+### Telegram 오류: Chat not found / BadRequest
+
+텔레그램 알림 사용 시 다음과 같은 오류가 발생하는 경우:
+
+```
+Exception: Chat not found, Type: <class 'telegram.error.BadRequest'>
+```
+
+**원인:**
+- 잘못된 Chat ID 입력
+- Bot Token이 올바르지 않음
+- 봇과 대화를 시작하지 않음
+
+**해결 방법:**
+
+1. **봇과 대화 시작:**
+   - 텔레그램에서 본인의 봇을 찾아 `/start` 명령 전송
+   - 봇과의 대화방이 생성되어야 메시지를 받을 수 있습니다
+
+2. **올바른 Chat ID 확인:**
+   ```bash
+   # 다음 URL로 Chat ID 확인 (YOUR_BOT_TOKEN을 실제 토큰으로 교체)
+   https://api.telegram.org/botYOUR_BOT_TOKEN/getUpdates
+   ```
+   - 브라우저에서 위 URL 접속
+   - `"chat":{"id":숫자}` 부분에서 Chat ID 확인
+   - [자세한 가이드](https://gabrielkim.tistory.com/entry/Telegram-Bot-Token-%EB%B0%8F-Chat-Id-%EC%96%BB%EA%B8%B0)
+
+3. **텔레그램 설정 다시 입력:**
+   ```bash
+   srtgo
+   # 메뉴에서 "텔레그램 설정" 선택
+   # Bot Token과 Chat ID 정확히 재입력
+   ```
+
+4. **텔레그램 기능 사용하지 않기:**
+   - 예매 시 카드 결제를 묻는 질문에서 `N` 선택
+   - 텔레그램 설정 없이도 예매 가능
+
 ## Acknowledgments
 - This project includes code from [SRT](https://github.com/ryanking13/SRT) by ryanking13, licensed under the MIT License, and [korail2](https://github.com/carpedm20/korail2) by carpedm20, licensed under the BSD License.

@@ -1,0 +1,16 @@
+# SRTgo 의존성 라이브러리
+# Python >= 3.10 필요
+
+# CLI 및 사용자 인터페이스
+click
+inquirer>=3.4
+prompt_toolkit>=3
+termcolor
+
+# 데이터 보안
+keyring
+PyCryptodome
+
+# 네트워크 및 통신
+requests
+python-telegram-bot

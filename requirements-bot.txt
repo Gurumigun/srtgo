@@ -1,0 +1,5 @@
+discord.py>=2.3
+aiosqlite>=0.19
+PyCryptodome>=3.19
+requests>=2.31
+python-dotenv>=1.0

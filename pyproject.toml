@@ -26,8 +26,15 @@ dependencies = [
 ]
 dynamic = ["version"]
 
+[project.optional-dependencies]
+bot = [
+    "discord.py>=2.3",
+    "aiosqlite>=0.19",
+    "python-dotenv>=1.0",
+]
+
 [tool.setuptools.packages.find]
-include = ["srtgo*"]
+include = ["srtgo*", "bot*"]
 
 [tool.setuptools_scm]
 
@@ -36,3 +43,4 @@ Homepage = "https://github.com/lapis42/srtgo"
 
 [project.scripts]
 srtgo = "srtgo.srtgo:srtgo"
+srtgo-bot = "bot.main:run_bot"

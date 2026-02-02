@@ -327,6 +327,30 @@ class RailTypeView(ui.View):
 
 
 # ──────────────────────────────────────
+# 편도/왕복 선택
+# ──────────────────────────────────────
+
+class TripTypeView(ui.View):
+    """편도/왕복 선택 버튼."""
+
+    def __init__(self, timeout: float = 300) -> None:
+        super().__init__(timeout=timeout)
+        self.selected_value: str | None = None
+
+    @ui.button(label="편도", style=discord.ButtonStyle.primary)
+    async def oneway(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        self.selected_value = "oneway"
+        self.stop()
+        await interaction.response.defer()
+
+    @ui.button(label="왕복", style=discord.ButtonStyle.success)
+    async def roundtrip(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        self.selected_value = "roundtrip"
+        self.stop()
+        await interaction.response.defer()
+
+
+# ──────────────────────────────────────
 # 프로필 설정 Modal
 # ──────────────────────────────────────
 

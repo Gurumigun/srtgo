@@ -71,14 +71,16 @@ def booking_summary_embed(
     seat_type_desc: str,
     selected_trains_desc: str,
     auto_pay: bool,
+    is_return_leg: bool = False,
 ) -> discord.Embed:
     """예약 요약 확인 Embed."""
     formatted_date = f"{date[:4]}/{date[4:6]}/{date[6:]}"
     # 복수 시간 지원 (콤마 구분)
     times = time_str.split(",") if "," in time_str else [time_str]
     time_fmt = ", ".join(f"{t[:2]}:{t[2:4]}" for t in times)
+    leg_label = " - 오는 편" if is_return_leg else ""
     embed = discord.Embed(
-        title=f"예약 확인 ({rail_type})",
+        title=f"예약 확인 ({rail_type}){leg_label}",
         color=rail_color(rail_type),
     )
     embed.add_field(name="구간", value=f"{departure} → {arrival}", inline=True)
@@ -92,10 +94,13 @@ def booking_summary_embed(
     return embed
 
 
-def searching_embed(rail_type: str, attempt: int, elapsed: str) -> discord.Embed:
+def searching_embed(
+    rail_type: str, attempt: int, elapsed: str, is_return_leg: bool = False
+) -> discord.Embed:
     """예매 진행 상태 Embed."""
+    leg_label = " - 오는 편" if is_return_leg else ""
     embed = discord.Embed(
-        title=f"예매 진행 중... ({rail_type})",
+        title=f"예매 진행 중... ({rail_type}){leg_label}",
         description=f"시도 횟수: **{attempt}**회 | 경과: {elapsed}",
         color=COLOR_WARNING,
     )
@@ -103,11 +108,12 @@ def searching_embed(rail_type: str, attempt: int, elapsed: str) -> discord.Embed
 
 
 def success_embed(
-    rail_type: str, reservation_number: str, details: str
+    rail_type: str, reservation_number: str, details: str, is_return_leg: bool = False
 ) -> discord.Embed:
     """예매 성공 Embed."""
+    leg_label = " - 오는 편" if is_return_leg else ""
     embed = discord.Embed(
-        title=f"예매 성공! ({rail_type})",
+        title=f"예매 성공! ({rail_type}){leg_label}",
         description=details,
         color=COLOR_SUCCESS,
     )

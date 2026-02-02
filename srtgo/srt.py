@@ -544,7 +544,7 @@ class NetFunnelHelper:
         return self._make_request("setComplete", ip)
 
     def _make_request(self, opcode: str, ip: str | None = None):
-        url = f"http://{ip or 'nf.letskorail.com'}/ts.wseq"
+        url = f"https://{ip or 'nf.letskorail.com'}/ts.wseq"
         params = self._build_params(self.OP_CODE[opcode])
         r = self._session.get(url, params=params)
         if self.debug:
@@ -562,7 +562,7 @@ class NetFunnelHelper:
         }
 
         if opcode in (self.OP_CODE["getTidchkEnter"], self.OP_CODE["chkEnter"]):
-            params.update({"sid": "service_1", "aid": "act_10"})
+            params.update({"sid": "service_1", "aid": "act_13"})
             if opcode == self.OP_CODE["chkEnter"]:
                 params.update({"key": key or self._cached_key, "ttl": "1"})
         elif opcode == self.OP_CODE["setComplete"]:

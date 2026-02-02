@@ -25,6 +25,10 @@ dependencies = [
     "termcolor"
 ]
 dynamic = ["version"]
+
+[tool.setuptools.packages.find]
+include = ["srtgo*"]
+
 [tool.setuptools_scm]
 
 [project.urls]

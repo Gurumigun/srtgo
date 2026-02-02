@@ -74,14 +74,16 @@ def booking_summary_embed(
 ) -> discord.Embed:
     """예약 요약 확인 Embed."""
     formatted_date = f"{date[:4]}/{date[4:6]}/{date[6:]}"
-    time_fmt = f"{time_str[:2]}:{time_str[2:4]}"
+    # 복수 시간 지원 (콤마 구분)
+    times = time_str.split(",") if "," in time_str else [time_str]
+    time_fmt = ", ".join(f"{t[:2]}:{t[2:4]}" for t in times)
     embed = discord.Embed(
         title=f"예약 확인 ({rail_type})",
         color=rail_color(rail_type),
     )
     embed.add_field(name="구간", value=f"{departure} → {arrival}", inline=True)
     embed.add_field(name="날짜", value=formatted_date, inline=True)
-    embed.add_field(name="시간", value=f"{time_fmt}~", inline=True)
+    embed.add_field(name="시간", value=time_fmt, inline=True)
     embed.add_field(name="승객", value=passengers_desc, inline=True)
     embed.add_field(name="좌석", value=seat_type_desc, inline=True)
     embed.add_field(name="자동결제", value="예" if auto_pay else "아니오", inline=True)
@@ -122,6 +124,26 @@ def error_embed(message: str) -> discord.Embed:
         description=message,
         color=COLOR_ERROR,
     )
+
+
+def favorite_routes_embed(routes: list[dict[str, Any]], discord_name: str) -> discord.Embed:
+    """즐겨찾기 노선 목록 Embed."""
+    embed = discord.Embed(
+        title="즐겨찾기 노선",
+        color=COLOR_INFO,
+    )
+    embed.set_author(name=discord_name)
+    if not routes:
+        embed.description = "등록된 즐겨찾기가 없습니다.\n`/즐겨찾기추가`로 노선을 등록하세요."
+    else:
+        for i, r in enumerate(routes, 1):
+            embed.add_field(
+                name=f"{i}. {r['departure']} → {r['arrival']}",
+                value=f"등록일: {r['created_at'][:10] if r.get('created_at') else '-'}",
+                inline=False,
+            )
+        embed.set_footer(text=f"{len(routes)}/6개 등록")
+    return embed
 
 
 def slot_status_embed(active: int, max_slots: int, slots_info: list[dict[str, str]]) -> discord.Embed:

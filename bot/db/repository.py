@@ -225,3 +225,59 @@ class SessionRepository:
             )
             row = await cursor.fetchone()
             return dict(row) if row else None
+
+
+class FavoriteRouteRepository:
+    """favorite_routes 테이블 CRUD."""
+
+    MAX_FAVORITES = 6
+
+    def __init__(self, db_path: str) -> None:
+        self._db_path = db_path
+
+    async def add(self, user_id: int, departure: str, arrival: str) -> int:
+        """즐겨찾기 추가. 6개 제한 초과 시 ValueError."""
+        current = await self.count(user_id)
+        if current >= self.MAX_FAVORITES:
+            raise ValueError(f"최대 {self.MAX_FAVORITES}개까지 등록 가능합니다.")
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                """INSERT OR IGNORE INTO favorite_routes (user_id, departure, arrival)
+                   VALUES (?, ?, ?)""",
+                (user_id, departure, arrival),
+            )
+            await db.commit()
+            if cursor.lastrowid == 0 or cursor.rowcount == 0:
+                raise ValueError("이미 등록된 노선입니다.")
+            return cursor.lastrowid  # type: ignore[return-value]
+
+    async def get_all(self, user_id: int) -> list[dict[str, Any]]:
+        """사용자의 즐겨찾기 전체 조회."""
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM favorite_routes WHERE user_id = ? ORDER BY created_at",
+                (user_id,),
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def remove(self, route_id: int, user_id: int) -> bool:
+        """즐겨찾기 삭제."""
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "DELETE FROM favorite_routes WHERE id = ? AND user_id = ?",
+                (route_id, user_id),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def count(self, user_id: int) -> int:
+        """즐겨찾기 개수 조회."""
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM favorite_routes WHERE user_id = ?",
+                (user_id,),
+            )
+            row = await cursor.fetchone()
+            return row[0] if row else 0

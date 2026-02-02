@@ -85,27 +85,32 @@ class DateSelectView(ui.View):
 # ──────────────────────────────────────
 
 class TimeSelect(ui.Select):
-    """시간 선택 드롭다운."""
+    """시간 선택 드롭다운 (복수 선택 가능)."""
 
     def __init__(self) -> None:
         options = [
             discord.SelectOption(label=f"{h:02d}시", value=f"{h:02d}0000")
             for h in range(24)
         ]
-        super().__init__(placeholder="시간을 선택하세요", options=options)
+        super().__init__(
+            placeholder="시간을 선택하세요 (복수 선택 가능)",
+            options=options,
+            min_values=1,
+            max_values=len(options),
+        )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        self.view.selected_value = self.values[0]  # type: ignore[attr-defined]
+        self.view.selected_values = sorted(self.values)  # type: ignore[attr-defined]
         self.view.stop()  # type: ignore[attr-defined]
         await interaction.response.defer()
 
 
 class TimeSelectView(ui.View):
-    """시간 선택 View."""
+    """시간 선택 View (복수 선택)."""
 
     def __init__(self, timeout: float = 300) -> None:
         super().__init__(timeout=timeout)
-        self.selected_value: str | None = None
+        self.selected_values: list[str] | None = None
         self.add_item(TimeSelect())
 
 
@@ -192,7 +197,7 @@ class PassengerCountView(ui.View):
     def __init__(self, timeout: float = 300) -> None:
         super().__init__(timeout=timeout)
         self.adults: int = 1
-        self.children: int = 0
+        self.child_count: int = 0
         self.seniors: int = 0
         self.confirmed: bool = False
 
@@ -200,16 +205,16 @@ class PassengerCountView(ui.View):
         parts = []
         if self.adults:
             parts.append(f"어른 {self.adults}명")
-        if self.children:
-            parts.append(f"어린이 {self.children}명")
+        if self.child_count:
+            parts.append(f"어린이 {self.child_count}명")
         if self.seniors:
             parts.append(f"경로 {self.seniors}명")
-        total = self.adults + self.children + self.seniors
+        total = self.adults + self.child_count + self.seniors
         return f"승객: {', '.join(parts)} (총 {total}명)" if parts else "승객을 선택해주세요"
 
     @ui.button(label="어른 +", style=discord.ButtonStyle.primary, row=0)
     async def adult_plus(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        if self.adults + self.children + self.seniors < 9:
+        if self.adults + self.child_count + self.seniors < 9:
             self.adults += 1
         await interaction.response.edit_message(content=self._make_content(), view=self)
 
@@ -221,19 +226,19 @@ class PassengerCountView(ui.View):
 
     @ui.button(label="어린이 +", style=discord.ButtonStyle.primary, row=1)
     async def child_plus(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        if self.adults + self.children + self.seniors < 9:
-            self.children += 1
+        if self.adults + self.child_count + self.seniors < 9:
+            self.child_count += 1
         await interaction.response.edit_message(content=self._make_content(), view=self)
 
     @ui.button(label="어린이 -", style=discord.ButtonStyle.secondary, row=1)
     async def child_minus(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        if self.children > 0:
-            self.children -= 1
+        if self.child_count > 0:
+            self.child_count -= 1
         await interaction.response.edit_message(content=self._make_content(), view=self)
 
     @ui.button(label="경로 +", style=discord.ButtonStyle.primary, row=2)
     async def senior_plus(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        if self.adults + self.children + self.seniors < 9:
+        if self.adults + self.child_count + self.seniors < 9:
             self.seniors += 1
         await interaction.response.edit_message(content=self._make_content(), view=self)
 
@@ -245,7 +250,7 @@ class PassengerCountView(ui.View):
 
     @ui.button(label="확인", style=discord.ButtonStyle.success, row=3)
     async def confirm(self, interaction: discord.Interaction, button: ui.Button) -> None:
-        if self.adults + self.children + self.seniors == 0:
+        if self.adults + self.child_count + self.seniors == 0:
             await interaction.response.send_message("승객 수는 0이 될 수 없습니다.", ephemeral=True)
             return
         self.confirmed = True
@@ -349,6 +354,78 @@ class ProfileModal(ui.Modal, title="프로필 설정"):
         self.user_id_value = self.rail_id.value
         self.user_pw_value = self.rail_pw.value
         await interaction.response.defer(ephemeral=True)
+
+
+# ──────────────────────────────────────
+# 즐겨찾기 노선 선택
+# ──────────────────────────────────────
+
+class FavoriteRouteSelect(ui.Select):
+    """즐겨찾기 노선 선택 드롭다운."""
+
+    def __init__(self, routes: list[dict], placeholder: str = "노선을 선택하세요") -> None:
+        options = []
+        for r in routes:
+            options.append(discord.SelectOption(
+                label=f"{r['departure']} → {r['arrival']}",
+                value=str(r["id"]),
+            ))
+        # "직접 선택" 옵션 추가
+        options.append(discord.SelectOption(
+            label="직접 선택",
+            value="manual",
+            description="출발역/도착역을 직접 선택합니다",
+            emoji="\u270F\uFE0F",
+        ))
+        super().__init__(placeholder=placeholder, options=options, min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        self.view.selected_value = self.values[0]  # type: ignore[attr-defined]
+        self.view.stop()  # type: ignore[attr-defined]
+        await interaction.response.defer()
+
+
+class FavoriteRouteSelectView(ui.View):
+    """즐겨찾기 노선 선택 View."""
+
+    def __init__(self, routes: list[dict], timeout: float = 300) -> None:
+        super().__init__(timeout=timeout)
+        self.selected_value: str | None = None
+        self.add_item(FavoriteRouteSelect(routes))
+
+    async def on_timeout(self) -> None:
+        self.selected_value = None
+
+
+class FavoriteDeleteSelect(ui.Select):
+    """즐겨찾기 삭제용 선택 드롭다운."""
+
+    def __init__(self, routes: list[dict]) -> None:
+        options = [
+            discord.SelectOption(
+                label=f"{r['departure']} → {r['arrival']}",
+                value=str(r["id"]),
+            )
+            for r in routes
+        ]
+        super().__init__(placeholder="삭제할 노선을 선택하세요", options=options, min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        self.view.selected_value = self.values[0]  # type: ignore[attr-defined]
+        self.view.stop()  # type: ignore[attr-defined]
+        await interaction.response.defer()
+
+
+class FavoriteDeleteView(ui.View):
+    """즐겨찾기 삭제 View."""
+
+    def __init__(self, routes: list[dict], timeout: float = 300) -> None:
+        super().__init__(timeout=timeout)
+        self.selected_value: str | None = None
+        self.add_item(FavoriteDeleteSelect(routes))
+
+    async def on_timeout(self) -> None:
+        self.selected_value = None
 
 
 class CardModal(ui.Modal, title="카드 설정"):

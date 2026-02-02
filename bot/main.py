@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from .config import Config
 from .core.slot_manager import SlotManager
 from .db.migrations import init_db
-from .db.repository import UserRepository, SessionRepository
+from .db.repository import UserRepository, SessionRepository, FavoriteRouteRepository
 from .security.encryption import FieldEncryptor
 from .security.key_manager import load_master_key
 
@@ -26,6 +26,7 @@ INITIAL_COGS = [
     "bot.cogs.profile",
     "bot.cogs.booking",
     "bot.cogs.admin",
+    "bot.cogs.favorite",
 ]
 
 
@@ -52,6 +53,7 @@ class SRTGoBot(commands.Bot):
         self.encryptor = FieldEncryptor(master_key)
         self.user_repo = UserRepository(config.db_path, self.encryptor)
         self.session_repo = SessionRepository(config.db_path)
+        self.fav_repo = FavoriteRouteRepository(config.db_path)
 
         # 활성 대화 세션 추적: channel_id → ConversationManager
         self.conversations: dict[int, object] = {}

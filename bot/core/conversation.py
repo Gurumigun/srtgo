@@ -32,6 +32,7 @@ from ..ui.views import (
     PassengerCountView,
     ConfirmView,
     StartCancelView,
+    FavoriteRouteSelectView,
 )
 
 if TYPE_CHECKING:
@@ -58,6 +59,7 @@ STATIONS = {
 
 class ConvStep(Enum):
     """대화 단계."""
+    FAVORITE = auto()
     DEPARTURE = auto()
     ARRIVAL = auto()
     DATE = auto()
@@ -89,7 +91,7 @@ class ConversationManager:
         self.bot = bot
         self.session = session
         self.channel = channel
-        self.step = ConvStep.DEPARTURE
+        self.step = ConvStep.FAVORITE
         self.engine = BookingEngine(bot.executor)
         self._polling_task: asyncio.Task | None = None
         self._timeout_task: asyncio.Task | None = None
@@ -123,7 +125,9 @@ class ConversationManager:
     async def _run_step(self) -> None:
         """현재 단계 실행."""
         try:
-            if self.step == ConvStep.DEPARTURE:
+            if self.step == ConvStep.FAVORITE:
+                await self._step_favorite()
+            elif self.step == ConvStep.DEPARTURE:
                 await self._step_station("출발역을 선택하세요:", is_departure=True)
             elif self.step == ConvStep.ARRIVAL:
                 await self._step_station("도착역을 선택하세요:", is_departure=False)
@@ -153,6 +157,45 @@ class ConversationManager:
             await self._cleanup()
 
     # ──────────── 단계별 구현 ────────────
+
+    async def _step_favorite(self) -> None:
+        """즐겨찾기 노선 선택 단계."""
+        # 즐겨찾기 조회
+        user_row = await self.bot.user_repo.get_by_discord_id(self.session.discord_id)
+        if user_row is None:
+            self.step = ConvStep.DEPARTURE
+            await self._run_step()
+            return
+
+        routes = await self.bot.fav_repo.get_all(user_row["id"])
+        if not routes:
+            # 즐겨찾기가 없으면 바로 DEPARTURE로
+            self.step = ConvStep.DEPARTURE
+            await self._run_step()
+            return
+
+        view = FavoriteRouteSelectView(routes, timeout=self.bot.config.conversation_timeout)
+        await self.channel.send("노선을 선택하세요:", view=view)
+        await view.wait()
+
+        if view.selected_value is None:
+            await self._timeout()
+            return
+
+        if view.selected_value == "manual":
+            # 직접 선택 → 기존 DEPARTURE 흐름
+            self.step = ConvStep.DEPARTURE
+        else:
+            # 즐겨찾기에서 선택 → 출발/도착 설정 후 DATE로
+            route_id = int(view.selected_value)
+            for r in routes:
+                if r["id"] == route_id:
+                    self.session.departure = r["departure"]
+                    self.session.arrival = r["arrival"]
+                    break
+            self.step = ConvStep.DATE
+
+        await self._run_step()
 
     async def _step_station(self, prompt: str, is_departure: bool) -> None:
         stations = STATIONS[self.session.rail_type]
@@ -192,14 +235,15 @@ class ConversationManager:
 
     async def _step_time(self) -> None:
         view = TimeSelectView(timeout=self.bot.config.conversation_timeout)
-        await self.channel.send("출발 시간을 선택하세요:", view=view)
+        await self.channel.send("출발 시간을 선택하세요 (복수 선택 가능):", view=view)
         await view.wait()
 
-        if view.selected_value is None:
+        if view.selected_values is None:
             await self._timeout()
             return
 
-        self.session.time = view.selected_value
+        # 복수 시간을 콤마 구분자로 저장
+        self.session.time = ",".join(view.selected_values)
         self.step = ConvStep.PASSENGERS
         await self._run_step()
 
@@ -214,7 +258,7 @@ class ConversationManager:
 
         self.session.passengers = PassengerInfo(
             adults=view.adults,
-            children=view.children,
+            children=view.child_count,
             seniors=view.seniors,
         )
         self.step = ConvStep.SEARCH

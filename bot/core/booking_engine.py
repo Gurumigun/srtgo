@@ -130,36 +130,55 @@ class BookingEngine:
             return await self._run_sync(Korail, user_id, user_pw, True, verbose)
 
     async def search_trains(self, session: BookingSession) -> list:
-        """열차 검색."""
+        """열차 검색. 복수 시간이 콤마로 구분되어 있으면 각각 검색 후 합산."""
         is_srt = session.rail_type == "SRT"
-        passengers = _build_passengers_srt(session.passengers) if is_srt else _build_passengers_ktx(session.passengers)
 
-        # 검색 파라미터 (기존 srtgo.py 로직과 동일)
         total_count = session.passengers.total
         if is_srt:
             search_passengers = [Adult(total_count)]
-            params = {
-                "dep": session.departure,
-                "arr": session.arrival,
-                "date": session.date,
-                "time": session.time,
-                "passengers": search_passengers,
-                "available_only": False,
-            }
         else:
             search_passengers = [AdultPassenger(total_count)]
-            params = {
-                "dep": session.departure,
-                "arr": session.arrival,
-                "date": session.date,
-                "time": session.time,
-                "passengers": search_passengers,
-                "include_no_seats": True,
-            }
 
-        trains = await self._run_sync(session.rail_client.search_train, **params)
-        session.trains_cache = trains
-        return trains
+        # 복수 시간 지원: 콤마 구분
+        times = session.time.split(",") if "," in session.time else [session.time]
+        all_trains = []
+        seen_keys: set[str] = set()
+
+        for t in times:
+            if is_srt:
+                params = {
+                    "dep": session.departure,
+                    "arr": session.arrival,
+                    "date": session.date,
+                    "time": t,
+                    "passengers": search_passengers,
+                    "available_only": False,
+                }
+            else:
+                params = {
+                    "dep": session.departure,
+                    "arr": session.arrival,
+                    "date": session.date,
+                    "time": t,
+                    "passengers": search_passengers,
+                    "include_no_seats": True,
+                }
+
+            trains = await self._run_sync(session.rail_client.search_train, **params)
+
+            for train in trains:
+                # 중복 제거: 열차번호 + 출발시간
+                train_no = getattr(train, "train_number", None) or getattr(train, "train_no", "")
+                dep_time = getattr(train, "dep_time", "")
+                key = f"{train_no}_{dep_time}"
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    all_trains.append(train)
+
+        # 출발시간 기준 정렬
+        all_trains.sort(key=lambda tr: getattr(tr, "dep_time", ""))
+        session.trains_cache = all_trains
+        return all_trains
 
     async def reserve(self, session: BookingSession, train) -> Any:
         """예약 실행."""

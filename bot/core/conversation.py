@@ -20,6 +20,7 @@ from ..ui.embeds import (
     booking_summary_embed,
     searching_embed,
     success_embed,
+    waiting_embed,
     error_embed,
 )
 from ..ui.formatters import format_train_for_select, format_reservation_detail, format_trains_summary
@@ -106,8 +107,6 @@ class ConversationManager:
 
         # 왕복 예매 상태
         self._is_round_trip: bool = False
-        self._is_return_leg: bool = False
-        self._outbound_reservation: Any = None
 
         # 오는 편 사전 입력 데이터
         self._return_date: str = ""
@@ -115,6 +114,13 @@ class ConversationManager:
         self._return_trains_cache: list[Any] = []
         self._return_trains_data: list[dict[str, str]] = []
         self._return_selected_train_indices: list[int] = []
+
+        # 병렬 실행 상태
+        self._return_session: BookingSession | None = None
+        self._return_polling_task: asyncio.Task | None = None
+        self._legs_done: int = 0
+        self._legs_total: int = 1  # 편도=1, 왕복=2
+        self._cleanup_done: bool = False
 
     async def start(self) -> None:
         """대화 시작."""
@@ -567,13 +573,19 @@ class ConversationManager:
         await self._run_step()
 
     async def _step_running(self) -> None:
-        """예매 폴링 루프 시작."""
+        """예매 폴링 루프 시작 (라우팅)."""
         self._cancel_timeout()
 
-        is_return = self._is_return_leg
+        if self._is_round_trip:
+            await self._run_parallel_booking()
+        else:
+            await self._run_single_booking()
+
+    async def _run_single_booking(self, leg_label: str = "") -> None:
+        """편도 예매 폴링 루프."""
         status_msg = await self.channel.send(
             embed=searching_embed(
-                self.session.rail_type, 0, "00:00:00", is_return_leg=is_return
+                self.session.rail_type, 0, "00:00:00", leg_label=leg_label,
             )
         )
         self.session.status_message = status_msg
@@ -583,7 +595,7 @@ class ConversationManager:
                 await status_msg.edit(
                     embed=searching_embed(
                         self.session.rail_type, attempt, elapsed,
-                        is_return_leg=is_return,
+                        leg_label=leg_label,
                     )
                 )
             except discord.HTTPException:
@@ -595,7 +607,7 @@ class ConversationManager:
                 self.session.rail_type,
                 self.session.reservation_number,
                 detail,
-                is_return_leg=is_return,
+                leg_label=leg_label,
             )
             await self.channel.send(embed=embed)
 
@@ -608,7 +620,8 @@ class ConversationManager:
                             self.session, reservation, card_info
                         )
                         if paid:
-                            await self.channel.send("카드 결제가 완료되었습니다!")
+                            label_prefix = f"**{leg_label}** " if leg_label else ""
+                            await self.channel.send(f"{label_prefix}카드 결제가 완료되었습니다!")
                             self.session.status = SessionStatus.PAID
                             await self.bot.session_repo.set_status(
                                 self.session.session_id, "paid"
@@ -616,93 +629,216 @@ class ConversationManager:
                     except Exception as ex:
                         await self.channel.send(f"결제 실패: {ex}")
 
-            # 왕복 예매: 가는 편 성공 후 오는 편 시작
-            if self._is_round_trip and not self._is_return_leg:
-                await self._start_return_trip(reservation)
-            else:
-                await self._cleanup(delay=30)
+            await self._cleanup(delay=30)
 
         async def on_error(msg: str) -> None:
             await self.channel.send(embed=error_embed(msg))
             await self.bot.session_repo.set_status(self.session.session_id, "error")
             await self._cleanup(delay=30)
 
+        async def on_waiting(reservation) -> None:
+            detail = format_reservation_detail(reservation, self.session.rail_type)
+            embed = waiting_embed(
+                self.session.rail_type,
+                self.session.reservation_number,
+                detail,
+                leg_label=leg_label,
+            )
+            await self.channel.send(embed=embed)
+
         self._polling_task = asyncio.create_task(
             self.engine.polling_loop(
-                self.session, on_progress, on_success, on_error, self.bot
+                self.session, on_progress, on_success, on_error, self.bot,
+                on_waiting=on_waiting,
             )
         )
 
-    async def _start_return_trip(self, outbound_reservation: Any) -> None:
-        """오는 편 예매 시작: 사전 입력 데이터로 바로 RUNNING 진입."""
-        self._is_return_leg = True
-        self._outbound_reservation = outbound_reservation
-
-        old_session = self.session
-
-        # 기존 슬롯 해제
-        await self.bot.slot_manager.release(old_session.session_id)
+    async def _create_return_session(self) -> BookingSession:
+        """오는 편 BookingSession 생성 (별도 로그인)."""
+        old = self.session
 
         # 새 DB 세션 생성
         new_session_id = await self.bot.session_repo.create_session(
-            user_id=old_session.user_db_id,
-            rail_type=old_session.rail_type,
+            user_id=old.user_db_id,
+            rail_type=old.rail_type,
             channel_id=str(self.channel.id),
         )
 
         # 새 슬롯 할당
         await self.bot.slot_manager.acquire(
             new_session_id,
-            old_session.discord_id,
-            old_session.rail_type,
+            old.discord_id,
+            old.rail_type,
             self.channel,
         )
 
-        # 새 BookingSession 생성 (사전 입력 데이터 사용)
-        self.session = BookingSession(
+        # 별도 로그인 (thread safety: 각 세션 별도 클라이언트)
+        creds = await self.bot.user_repo.get_credentials(old.discord_id, old.rail_type)
+        if not creds:
+            raise ValueError("계정 정보를 찾을 수 없습니다")
+        return_client = await self.engine.login(old.rail_type, creds[0], creds[1])
+
+        session = BookingSession(
             session_id=new_session_id,
-            user_db_id=old_session.user_db_id,
-            discord_id=old_session.discord_id,
-            channel_id=old_session.channel_id,
-            rail_type=old_session.rail_type,
-            departure=old_session.arrival,       # 교환
-            arrival=old_session.departure,       # 교환
-            date=self._return_date,              # 사전 입력
-            time=self._return_time,              # 사전 입력
-            passengers=old_session.passengers,
-            seat_type=old_session.seat_type,
+            user_db_id=old.user_db_id,
+            discord_id=old.discord_id,
+            channel_id=old.channel_id,
+            rail_type=old.rail_type,
+            departure=old.arrival,       # 교환
+            arrival=old.departure,       # 교환
+            date=self._return_date,
+            time=self._return_time,
+            passengers=old.passengers,
+            seat_type=old.seat_type,
             selected_train_indices=self._return_selected_train_indices,
-            auto_pay=old_session.auto_pay,
-            rail_client=old_session.rail_client,
+            auto_pay=old.auto_pay,
+            rail_client=return_client,
             trains_cache=self._return_trains_cache,
         )
 
-        # 포맷 데이터 교체
-        self._trains_data = self._return_trains_data
-
-        # 대화 추적 업데이트
-        self.bot.conversations[self.channel.id] = self
-
         # DB에 오는 편 세션 정보 저장
         await self.bot.session_repo.update_session(
-            self.session.session_id,
-            departure=self.session.departure,
-            arrival=self.session.arrival,
-            date=self.session.date,
-            time=self.session.time,
-            passengers_json=self.session.passengers.to_dict(),
-            seat_type=self.session.seat_type,
-            selected_trains_json=self.session.selected_train_indices,
-            auto_pay=1 if self.session.auto_pay else 0,
+            session.session_id,
+            departure=session.departure,
+            arrival=session.arrival,
+            date=session.date,
+            time=session.time,
+            passengers_json=session.passengers.to_dict(),
+            seat_type=session.seat_type,
+            selected_trains_json=session.selected_train_indices,
+            auto_pay=1 if session.auto_pay else 0,
         )
 
-        # 안내 메시지 + 바로 RUNNING
+        return session
+
+    async def _run_parallel_booking(self) -> None:
+        """왕복 예매: 가는 편/오는 편 동시 시작."""
+        self._legs_total = 2
+        self._legs_done = 0
+
+        # 오는 편 세션 생성 (별도 로그인)
+        try:
+            self._return_session = await self._create_return_session()
+        except Exception as ex:
+            log.warning("오는 편 세션 생성 실패: %s", ex)
+            await self.channel.send(
+                embed=error_embed(f"오는 편 세션 생성 실패: {ex}\n가는 편만 진행합니다.")
+            )
+            self._legs_total = 1
+            await self._run_single_booking(leg_label="가는 편")
+            return
+
         await self.channel.send(
-            f"\n**오는 편** 예매를 자동으로 시작합니다.\n"
-            f"**{self.session.departure}** → **{self.session.arrival}**"
+            f"**가는 편**과 **오는 편** 예매를 동시에 시작합니다!\n"
+            f"가는 편: **{self.session.departure}** → **{self.session.arrival}**\n"
+            f"오는 편: **{self._return_session.departure}** → **{self._return_session.arrival}**"
         )
-        self.step = ConvStep.RUNNING
-        await self._run_step()
+
+        # 콜백 팩토리
+        def _make_callbacks(session: BookingSession, label: str):
+            status_msg_holder: list[discord.Message] = []
+
+            async def on_progress(attempt: int, elapsed: str) -> None:
+                if not status_msg_holder:
+                    return
+                try:
+                    await status_msg_holder[0].edit(
+                        embed=searching_embed(
+                            session.rail_type, attempt, elapsed, leg_label=label,
+                        )
+                    )
+                except discord.HTTPException:
+                    pass
+
+            async def on_success(reservation) -> None:
+                detail = format_reservation_detail(reservation, session.rail_type)
+                embed = success_embed(
+                    session.rail_type,
+                    session.reservation_number,
+                    detail,
+                    leg_label=label,
+                )
+                await self.channel.send(embed=embed)
+
+                # 자동 결제
+                if session.auto_pay:
+                    card_info = await self.bot.user_repo.get_card_info(session.discord_id)
+                    if card_info and not getattr(reservation, "is_waiting", False):
+                        try:
+                            paid = await self.engine.pay_with_card(
+                                session, reservation, card_info
+                            )
+                            if paid:
+                                await self.channel.send(
+                                    f"**{label}** 카드 결제가 완료되었습니다!"
+                                )
+                                session.status = SessionStatus.PAID
+                                await self.bot.session_repo.set_status(
+                                    session.session_id, "paid"
+                                )
+                        except Exception as ex:
+                            await self.channel.send(f"**{label}** 결제 실패: {ex}")
+
+                self._legs_done += 1
+                if self._legs_done >= self._legs_total:
+                    await self._cleanup(delay=30)
+
+            async def on_error(msg: str) -> None:
+                await self.channel.send(embed=error_embed(f"**{label}** {msg}"))
+                await self.bot.session_repo.set_status(session.session_id, "error")
+                self._legs_done += 1
+                if self._legs_done >= self._legs_total:
+                    await self._cleanup(delay=30)
+
+            async def on_waiting(reservation) -> None:
+                detail = format_reservation_detail(reservation, session.rail_type)
+                embed = waiting_embed(
+                    session.rail_type,
+                    session.reservation_number,
+                    detail,
+                    leg_label=label,
+                )
+                await self.channel.send(embed=embed)
+
+            return status_msg_holder, on_progress, on_success, on_error, on_waiting
+
+        # 가는 편 콜백
+        out_holder, out_progress, out_success, out_error, out_waiting = _make_callbacks(
+            self.session, "가는 편"
+        )
+        # 오는 편 콜백
+        ret_holder, ret_progress, ret_success, ret_error, ret_waiting = _make_callbacks(
+            self._return_session, "오는 편"
+        )
+
+        # 상태 메시지 생성
+        out_msg = await self.channel.send(
+            embed=searching_embed(self.session.rail_type, 0, "00:00:00", leg_label="가는 편")
+        )
+        self.session.status_message = out_msg
+        out_holder.append(out_msg)
+
+        ret_msg = await self.channel.send(
+            embed=searching_embed(
+                self._return_session.rail_type, 0, "00:00:00", leg_label="오는 편"
+            )
+        )
+        self._return_session.status_message = ret_msg
+        ret_holder.append(ret_msg)
+
+        # 두 폴링 태스크 동시 시작
+        self._polling_task = asyncio.create_task(
+            self.engine.polling_loop(
+                self.session, out_progress, out_success, out_error, self.bot,
+                on_waiting=out_waiting,
+            )
+        )
+        self._return_polling_task = asyncio.create_task(
+            self.engine.polling_loop(
+                self._return_session, ret_progress, ret_success, ret_error, self.bot,
+                on_waiting=ret_waiting,
+            )
+        )
 
     # ──────────── 유틸리티 ────────────
 
@@ -730,19 +866,37 @@ class ConversationManager:
         """예매 취소."""
         if self._polling_task and not self._polling_task.done():
             self._polling_task.cancel()
+        if self._return_polling_task and not self._return_polling_task.done():
+            self._return_polling_task.cancel()
+
         await self.channel.send(message)
         self.session.status = SessionStatus.CANCELLED
         await self.bot.session_repo.set_status(self.session.session_id, "cancelled")
+
+        if self._return_session:
+            self._return_session.status = SessionStatus.CANCELLED
+            await self.bot.session_repo.set_status(
+                self._return_session.session_id, "cancelled"
+            )
+
         await self._cleanup(delay=5)
 
     async def _cleanup(self, delay: int = 10) -> None:
         """리소스 정리 + 채널 삭제."""
+        if self._cleanup_done:
+            return
+        self._cleanup_done = True
+
         self._cancel_timeout()
         if self._polling_task and not self._polling_task.done():
             self._polling_task.cancel()
+        if self._return_polling_task and not self._return_polling_task.done():
+            self._return_polling_task.cancel()
 
         # 슬롯 해제
         await self.bot.slot_manager.release(self.session.session_id)
+        if self._return_session:
+            await self.bot.slot_manager.release(self._return_session.session_id)
 
         # 대화 추적 해제
         self.bot.conversations.pop(self.channel.id, None)

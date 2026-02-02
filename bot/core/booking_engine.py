@@ -106,6 +106,28 @@ def _is_seat_available(train, seat_type_str: str, is_srt: bool) -> bool:
         return train.has_special_seat()
 
 
+def _has_confirmed_seat(train, seat_type_str: str, is_srt: bool) -> bool:
+    """확정 좌석 가용성만 확인 (예약대기/대기 제외)."""
+    if is_srt:
+        if not train.seat_available():
+            return False
+        seat_type = _get_seat_option(seat_type_str, True)
+        if seat_type in (SeatType.GENERAL_FIRST, SeatType.SPECIAL_FIRST):
+            return train.seat_available()
+        if seat_type == SeatType.GENERAL_ONLY:
+            return train.general_seat_available()
+        return train.special_seat_available()
+    else:
+        if not train.has_seat():
+            return False
+        seat_type = _get_seat_option(seat_type_str, False)
+        if seat_type in (ReserveOption.GENERAL_FIRST, ReserveOption.SPECIAL_FIRST):
+            return train.has_seat()
+        if seat_type == ReserveOption.GENERAL_ONLY:
+            return train.has_general_seat()
+        return train.has_special_seat()
+
+
 class BookingEngine:
     """SRT/KTX 비동기 예약 엔진.
 
@@ -241,16 +263,19 @@ class BookingEngine:
         on_success: Any,   # Callable[[Any], Awaitable]
         on_error: Any,     # Callable[[str], Awaitable]
         bot: SRTGoBot,
+        on_waiting: Any = None,  # Callable[[Any], Awaitable] - 예약대기 콜백
     ) -> None:
         """예매 폴링 루프.
 
         기존 srtgo.py의 reserve() 루프를 비동기로 재현.
+        예약대기(standby) 확보 시 on_waiting 호출 후 확정 좌석을 계속 검색한다.
         """
         is_srt = session.rail_type == "SRT"
         session.status = SessionStatus.SEARCHING
         await bot.session_repo.set_status(session.session_id, "searching")
 
         start_time = time.time()
+        has_waiting = False  # 예약대기 확보 여부
 
         while session.status == SessionStatus.SEARCHING:
             try:
@@ -272,25 +297,49 @@ class BookingEngine:
                 for idx in session.selected_train_indices:
                     if idx < len(trains):
                         train = trains[idx]
-                        if _is_seat_available(train, session.seat_type, is_srt):
+
+                        # 예약대기 확보 후에는 확정 좌석만 확인
+                        if has_waiting:
+                            available = _has_confirmed_seat(train, session.seat_type, is_srt)
+                        else:
+                            available = _is_seat_available(train, session.seat_type, is_srt)
+
+                        if available:
                             # 예약 시도
                             reservation = await self.reserve(session, train)
-                            session.status = SessionStatus.RESERVED
+                            is_waiting_rsv = getattr(reservation, "is_waiting", False)
 
                             # 예약번호 저장
                             if is_srt:
-                                session.reservation_number = reservation.reservation_number
+                                rsv_number = reservation.reservation_number
                             else:
-                                session.reservation_number = reservation.rsv_id
+                                rsv_number = reservation.rsv_id
 
-                            await bot.session_repo.set_status(session.session_id, "reserved")
-                            await bot.session_repo.update_session(
-                                session.session_id,
-                                reservation_number=session.reservation_number,
-                            )
+                            if is_waiting_rsv and not has_waiting:
+                                # 예약대기 → 저장하고 계속 진행
+                                has_waiting = True
+                                session.reservation_number = rsv_number
+                                await bot.session_repo.update_session(
+                                    session.session_id,
+                                    reservation_number=rsv_number,
+                                )
+                                if on_waiting:
+                                    await on_waiting(reservation)
+                                break  # 이번 루프의 열차 탐색 중단, 다음 폴링으로
 
-                            await on_success(reservation)
-                            return
+                            elif not is_waiting_rsv:
+                                # 확정 예약 → 성공
+                                session.status = SessionStatus.RESERVED
+                                session.reservation_number = rsv_number
+
+                                await bot.session_repo.set_status(session.session_id, "reserved")
+                                await bot.session_repo.update_session(
+                                    session.session_id,
+                                    reservation_number=rsv_number,
+                                )
+
+                                await on_success(reservation)
+                                return
 
                 # 감마분포 기반 대기
                 await asyncio.sleep(

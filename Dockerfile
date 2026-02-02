@@ -17,7 +17,7 @@ COPY bot/ bot/
 COPY pyproject.toml .
 
 # srtgo 패키지 설치 (SRT/KTX 클라이언트)
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir .
 
 # 데이터 디렉토리
 RUN mkdir -p /app/data

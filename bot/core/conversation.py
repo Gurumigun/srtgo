@@ -71,6 +71,10 @@ class ConvStep(Enum):
     TRAIN_SELECT = auto()
     SEAT_TYPE = auto()
     AUTO_PAY = auto()
+    RETURN_DATE = auto()
+    RETURN_TIME = auto()
+    RETURN_SEARCH = auto()
+    RETURN_TRAIN_SELECT = auto()
     CONFIRM = auto()
     RUNNING = auto()
     DONE = auto()
@@ -104,6 +108,13 @@ class ConversationManager:
         self._is_round_trip: bool = False
         self._is_return_leg: bool = False
         self._outbound_reservation: Any = None
+
+        # 오는 편 사전 입력 데이터
+        self._return_date: str = ""
+        self._return_time: str = ""
+        self._return_trains_cache: list[Any] = []
+        self._return_trains_data: list[dict[str, str]] = []
+        self._return_selected_train_indices: list[int] = []
 
     async def start(self) -> None:
         """대화 시작."""
@@ -154,6 +165,14 @@ class ConversationManager:
                 await self._step_seat_type()
             elif self.step == ConvStep.AUTO_PAY:
                 await self._step_auto_pay()
+            elif self.step == ConvStep.RETURN_DATE:
+                await self._step_return_date()
+            elif self.step == ConvStep.RETURN_TIME:
+                await self._step_return_time()
+            elif self.step == ConvStep.RETURN_SEARCH:
+                await self._step_return_search()
+            elif self.step == ConvStep.RETURN_TRAIN_SELECT:
+                await self._step_return_train_select()
             elif self.step == ConvStep.CONFIRM:
                 await self._step_confirm()
             elif self.step == ConvStep.RUNNING:
@@ -333,11 +352,7 @@ class ConversationManager:
             return
 
         self.session.selected_train_indices = view.selected_values
-        if self._is_return_leg:
-            # 오는 편: 좌석/결제 설정 건너뛰기 (가는 편과 동일 설정 사용)
-            self.step = ConvStep.CONFIRM
-        else:
-            self.step = ConvStep.SEAT_TYPE
+        self.step = ConvStep.SEAT_TYPE
         await self._run_step()
 
     async def _step_seat_type(self) -> None:
@@ -369,11 +384,118 @@ class ConversationManager:
         else:
             self.session.auto_pay = False
 
+        if self._is_round_trip:
+            self.step = ConvStep.RETURN_DATE
+        else:
+            self.step = ConvStep.CONFIRM
+        await self._run_step()
+
+    # ──────────── 오는 편 사전 입력 ────────────
+
+    async def _step_return_date(self) -> None:
+        """오는 편 날짜 선택."""
+        await self.channel.send(
+            f"\n**오는 편** 정보를 입력합니다. "
+            f"(**{self.session.arrival}** → **{self.session.departure}**)"
+        )
+        view = DateSelectView(timeout=self.bot.config.conversation_timeout)
+        await self.channel.send("오는 편 날짜를 선택하세요:", view=view)
+        await view.wait()
+
+        if view.selected_value is None:
+            await self._timeout()
+            return
+
+        self._return_date = view.selected_value
+        self.step = ConvStep.RETURN_TIME
+        await self._run_step()
+
+    async def _step_return_time(self) -> None:
+        """오는 편 시간 선택."""
+        view = TimeSelectView(timeout=self.bot.config.conversation_timeout)
+        await self.channel.send("오는 편 출발 시간을 선택하세요 (복수 선택 가능):", view=view)
+        await view.wait()
+
+        if view.selected_values is None:
+            await self._timeout()
+            return
+
+        self._return_time = ",".join(view.selected_values)
+        self.step = ConvStep.RETURN_SEARCH
+        await self._run_step()
+
+    async def _step_return_search(self) -> None:
+        """오는 편 열차 검색 (출발/도착 교환)."""
+        msg = await self.channel.send("오는 편 열차를 검색 중입니다...")
+
+        # 임시 세션으로 오는 편 검색 (출발/도착 교환)
+        temp_session = BookingSession(
+            session_id=self.session.session_id,
+            user_db_id=self.session.user_db_id,
+            discord_id=self.session.discord_id,
+            channel_id=self.session.channel_id,
+            rail_type=self.session.rail_type,
+            departure=self.session.arrival,      # 교환
+            arrival=self.session.departure,      # 교환
+            date=self._return_date,
+            time=self._return_time,
+            passengers=self.session.passengers,
+            rail_client=self.session.rail_client,
+        )
+
+        try:
+            trains = await self.engine.search_trains(temp_session)
+        except Exception as ex:
+            await msg.edit(content=f"오는 편 검색 실패: {ex}")
+            await self._cleanup()
+            return
+
+        if not trains:
+            await msg.edit(
+                content="오는 편 검색 결과가 없습니다. 다른 날짜/시간을 선택해주세요."
+            )
+            self.step = ConvStep.RETURN_DATE
+            await self._run_step()
+            return
+
+        trains_data = [
+            format_train_for_select(t, i, self.session.rail_type)
+            for i, t in enumerate(trains)
+        ]
+        embed = train_list_embed(
+            trains_data,
+            self.session.rail_type,
+            self.session.arrival,       # 오는 편 출발역
+            self.session.departure,     # 오는 편 도착역
+            self._return_date,
+        )
+        await msg.edit(content=None, embed=embed)
+
+        self._return_trains_cache = trains
+        self._return_trains_data = trains_data
+        self.step = ConvStep.RETURN_TRAIN_SELECT
+        await self._run_step()
+
+    async def _step_return_train_select(self) -> None:
+        """오는 편 열차 선택."""
+        view = TrainSelectView(
+            self._return_trains_data, timeout=self.bot.config.conversation_timeout
+        )
+        await self.channel.send("오는 편 열차를 선택하세요 (복수 선택 가능):", view=view)
+        await view.wait()
+
+        if view.selected_values is None:
+            await self._timeout()
+            return
+
+        self._return_selected_train_indices = view.selected_values
         self.step = ConvStep.CONFIRM
         await self._run_step()
 
+    # ──────────── 확인 / 실행 ────────────
+
     async def _step_confirm(self) -> None:
-        # 선택된 열차 요약
+        # 가는 편 열차 요약
         trains_data = getattr(self, "_trains_data", [])
         selected_data = [
             trains_data[i] for i in self.session.selected_train_indices
@@ -381,6 +503,7 @@ class ConversationManager:
         ]
         selected_desc = format_trains_summary(selected_data)
 
+        title_prefix = "가는 편 " if self._is_round_trip else ""
         embed = booking_summary_embed(
             rail_type=self.session.rail_type,
             departure=self.session.departure,
@@ -391,11 +514,36 @@ class ConversationManager:
             seat_type_desc=self.session.seat_type_desc,
             selected_trains_desc=selected_desc,
             auto_pay=self.session.auto_pay,
-            is_return_leg=self._is_return_leg,
         )
+        if self._is_round_trip:
+            embed.title = f"예약 확인 ({self.session.rail_type}) - 가는 편"
+        await self.channel.send(embed=embed)
+
+        # 왕복일 때 오는 편 요약도 표시
+        if self._is_round_trip:
+            return_selected_data = [
+                self._return_trains_data[i]
+                for i in self._return_selected_train_indices
+                if i < len(self._return_trains_data)
+            ]
+            return_selected_desc = format_trains_summary(return_selected_data)
+
+            return_embed = booking_summary_embed(
+                rail_type=self.session.rail_type,
+                departure=self.session.arrival,
+                arrival=self.session.departure,
+                date=self._return_date,
+                time_str=self._return_time,
+                passengers_desc=self.session.passengers.description(),
+                seat_type_desc=self.session.seat_type_desc,
+                selected_trains_desc=return_selected_desc,
+                auto_pay=self.session.auto_pay,
+                is_return_leg=True,
+            )
+            await self.channel.send(embed=return_embed)
 
         view = StartCancelView(timeout=self.bot.config.conversation_timeout)
-        await self.channel.send(embed=embed, view=view)
+        await self.channel.send("위 내용으로 예매를 시작하시겠습니까?", view=view)
         await view.wait()
 
         if view.result is None or not view.result:
@@ -486,7 +634,7 @@ class ConversationManager:
         )
 
     async def _start_return_trip(self, outbound_reservation: Any) -> None:
-        """오는 편 예매 시작: 출발/도착 교환, 새 DB 세션 생성."""
+        """오는 편 예매 시작: 사전 입력 데이터로 바로 RUNNING 진입."""
         self._is_return_leg = True
         self._outbound_reservation = outbound_reservation
 
@@ -510,32 +658,50 @@ class ConversationManager:
             self.channel,
         )
 
-        # 새 BookingSession 생성 (출발/도착 교환, 승객/좌석/자동결제 복사)
+        # 새 BookingSession 생성 (사전 입력 데이터 사용)
         self.session = BookingSession(
             session_id=new_session_id,
             user_db_id=old_session.user_db_id,
             discord_id=old_session.discord_id,
             channel_id=old_session.channel_id,
             rail_type=old_session.rail_type,
-            departure=old_session.arrival,      # 교환
-            arrival=old_session.departure,      # 교환
-            passengers=old_session.passengers,  # 복사
-            seat_type=old_session.seat_type,    # 복사
-            auto_pay=old_session.auto_pay,      # 복사
-            rail_client=old_session.rail_client, # 재사용
+            departure=old_session.arrival,       # 교환
+            arrival=old_session.departure,       # 교환
+            date=self._return_date,              # 사전 입력
+            time=self._return_time,              # 사전 입력
+            passengers=old_session.passengers,
+            seat_type=old_session.seat_type,
+            selected_train_indices=self._return_selected_train_indices,
+            auto_pay=old_session.auto_pay,
+            rail_client=old_session.rail_client,
+            trains_cache=self._return_trains_cache,
         )
+
+        # 포맷 데이터 교체
+        self._trains_data = self._return_trains_data
 
         # 대화 추적 업데이트
         self.bot.conversations[self.channel.id] = self
 
-        # 안내 메시지 + DATE 단계부터 시작
-        await self.channel.send(
-            f"\n**오는 편** 예매를 시작합니다.\n"
-            f"**{self.session.departure}** → **{self.session.arrival}**\n"
-            f"날짜와 시간을 선택해주세요."
+        # DB에 오는 편 세션 정보 저장
+        await self.bot.session_repo.update_session(
+            self.session.session_id,
+            departure=self.session.departure,
+            arrival=self.session.arrival,
+            date=self.session.date,
+            time=self.session.time,
+            passengers_json=self.session.passengers.to_dict(),
+            seat_type=self.session.seat_type,
+            selected_trains_json=self.session.selected_train_indices,
+            auto_pay=1 if self.session.auto_pay else 0,
         )
-        self._reset_timeout()
-        self.step = ConvStep.DATE
+
+        # 안내 메시지 + 바로 RUNNING
+        await self.channel.send(
+            f"\n**오는 편** 예매를 자동으로 시작합니다.\n"
+            f"**{self.session.departure}** → **{self.session.arrival}**"
+        )
+        self.step = ConvStep.RUNNING
         await self._run_step()
 
     # ──────────── 유틸리티 ────────────

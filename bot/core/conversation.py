@@ -888,9 +888,13 @@ class ConversationManager:
         self._cleanup_done = True
 
         self._cancel_timeout()
-        if self._polling_task and not self._polling_task.done():
+
+        # 현재 태스크가 폴링 태스크 자신인 경우 cancel하면
+        # CancelledError가 발생하여 이후 await에서 정리가 중단되므로 제외
+        current = asyncio.current_task()
+        if self._polling_task and not self._polling_task.done() and self._polling_task is not current:
             self._polling_task.cancel()
-        if self._return_polling_task and not self._return_polling_task.done():
+        if self._return_polling_task and not self._return_polling_task.done() and self._return_polling_task is not current:
             self._return_polling_task.cancel()
 
         # 슬롯 해제

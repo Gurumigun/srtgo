@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import discord
@@ -108,7 +109,8 @@ class BookingCog(commands.Cog):
             ),
         }
 
-        channel_name = f"예매-{interaction.user.display_name}-{rail_type}".lower()
+        timestamp = datetime.now().strftime("%m%d-%H%M")
+        channel_name = f"예매-{interaction.user.display_name}-{rail_type}-{timestamp}".lower()
         try:
             channel = await guild.create_text_channel(
                 name=channel_name,

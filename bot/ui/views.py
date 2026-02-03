@@ -460,8 +460,8 @@ class CardModal(ui.Modal, title="카드 설정"):
         self.card_values: dict[str, str] = {}
 
     card_number = ui.TextInput(
-        label="카드번호 (하이픈 제외)",
-        placeholder="1234567890123456",
+        label="카드번호 (띄어쓰기/하이픈 가능)",
+        placeholder="1234 5678 9012 3456",
         required=True,
     )
     card_password = ui.TextInput(
@@ -483,8 +483,24 @@ class CardModal(ui.Modal, title="카드 설정"):
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        # 카드번호에서 공백, 하이픈 제거
+        card_number_clean = self.card_number.value.replace(" ", "").replace("-", "")
+
+        # 숫자만 입력되었는지 검증
+        if not card_number_clean.isdigit():
+            await interaction.response.send_message(
+                "❌ 카드번호는 숫자만 입력해주세요.", ephemeral=True
+            )
+            return
+
+        if len(card_number_clean) < 15 or len(card_number_clean) > 16:
+            await interaction.response.send_message(
+                "❌ 카드번호는 15~16자리여야 합니다.", ephemeral=True
+            )
+            return
+
         self.card_values = {
-            "card_number": self.card_number.value,
+            "card_number": card_number_clean,
             "card_password": self.card_password.value,
             "card_birthday": self.card_birthday.value,
             "card_expire": self.card_expire.value,

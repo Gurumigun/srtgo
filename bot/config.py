@@ -28,10 +28,26 @@ class Config:
     # 대화 타임아웃 (초)
     conversation_timeout: int = 300
 
-    # 예약 폴링 간격 (초)
-    poll_interval_shape: float = 4.0
-    poll_interval_scale: float = 0.25
-    poll_interval_min: float = 0.5
+    # 예약 폴링 간격 (초) - 기본 랜덤 대기
+    poll_interval_shape: float = 5.0    # 감마분포 shape (높을수록 평균 증가)
+    poll_interval_scale: float = 0.5    # 감마분포 scale (높을수록 분산 증가)
+    poll_interval_min: float = 1.5      # 최소 대기 시간 (초)
+
+    # 미세 휴식 (micro-break): N회 요청마다 짧은 휴식
+    micro_break_interval_min: int = 15   # 미세 휴식 간격 최소 (요청 횟수)
+    micro_break_interval_max: int = 30   # 미세 휴식 간격 최대 (요청 횟수)
+    micro_break_duration_min: float = 10.0   # 미세 휴식 최소 시간 (초)
+    micro_break_duration_max: float = 45.0   # 미세 휴식 최대 시간 (초)
+
+    # 활동/휴식 사이클: 일정 시간 검색 후 장시간 휴식
+    poll_active_minutes: int = 60        # 활성 검색 기준 시간 (분), 매 사이클 ±15% 편차
+    poll_active_jitter: float = 0.15     # 활성 검색 시간 편차 비율 (0.15 = ±15%)
+    poll_rest_minutes_min: int = 60      # 휴식 최소 시간 (분) = 1시간
+    poll_rest_minutes_max: int = 180     # 휴식 최대 시간 (분) = 3시간
+
+    # 전체 검색 제한
+    poll_max_hours: float = 0            # 최대 총 검색 시간 (시간, 0=무제한)
+    poll_max_cycles: int = 0             # 최대 활동/휴식 사이클 수 (0=무제한)
 
     # ThreadPool
     thread_pool_workers: int = 8
@@ -47,6 +63,23 @@ class Config:
             db_path=os.environ.get("SRTGO_DB_PATH", "data/srtgo.db"),
             max_slots=int(os.environ.get("MAX_SLOTS", "4")),
             conversation_timeout=int(os.environ.get("CONVERSATION_TIMEOUT", "300")),
+            # 폴링 간격
+            poll_interval_shape=float(os.environ.get("POLL_INTERVAL_SHAPE", "5.0")),
+            poll_interval_scale=float(os.environ.get("POLL_INTERVAL_SCALE", "0.5")),
+            poll_interval_min=float(os.environ.get("POLL_INTERVAL_MIN", "1.5")),
+            # 미세 휴식
+            micro_break_interval_min=int(os.environ.get("MICRO_BREAK_INTERVAL_MIN", "15")),
+            micro_break_interval_max=int(os.environ.get("MICRO_BREAK_INTERVAL_MAX", "30")),
+            micro_break_duration_min=float(os.environ.get("MICRO_BREAK_DURATION_MIN", "10.0")),
+            micro_break_duration_max=float(os.environ.get("MICRO_BREAK_DURATION_MAX", "45.0")),
+            # 활동/휴식 사이클
+            poll_active_minutes=int(os.environ.get("POLL_ACTIVE_MINUTES", "60")),
+            poll_active_jitter=float(os.environ.get("POLL_ACTIVE_JITTER", "0.15")),
+            poll_rest_minutes_min=int(os.environ.get("POLL_REST_MINUTES_MIN", "60")),
+            poll_rest_minutes_max=int(os.environ.get("POLL_REST_MINUTES_MAX", "180")),
+            # 전체 제한
+            poll_max_hours=float(os.environ.get("POLL_MAX_HOURS", "0")),
+            poll_max_cycles=int(os.environ.get("POLL_MAX_CYCLES", "0")),
         )
 
     def validate(self) -> list[str]:

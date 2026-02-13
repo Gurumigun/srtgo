@@ -161,6 +161,45 @@ def waiting_embed(
     return embed
 
 
+def rest_embed(
+    rail_type: str, rest_minutes: int, cycle_info: str, leg_label: str = "",
+) -> discord.Embed:
+    """휴식 진입 Embed."""
+    suffix = f" - {leg_label}" if leg_label else ""
+    embed = discord.Embed(
+        title=f"검색 일시 정지 ({rail_type}){suffix}",
+        description=(
+            f"매크로 감지 회피를 위해 약 **{rest_minutes}분** 동안 휴식합니다.\n"
+            f"휴식 후 자동으로 검색이 재개됩니다."
+        ),
+        color=COLOR_WARNING,
+    )
+    embed.add_field(name="사이클", value=cycle_info, inline=True)
+    now = datetime.now()
+    resume_hour = (now.hour + (now.minute + rest_minutes) // 60) % 24
+    resume_min = (now.minute + rest_minutes) % 60
+    embed.add_field(
+        name="예상 재개 시간",
+        value=f"{resume_hour:02d}:{resume_min:02d}",
+        inline=True,
+    )
+    return embed
+
+
+def resume_embed(
+    rail_type: str, cycle_number: int, leg_label: str = "",
+) -> discord.Embed:
+    """검색 재개 Embed."""
+    suffix = f" - {leg_label}" if leg_label else ""
+    embed = discord.Embed(
+        title=f"검색 재개 ({rail_type}){suffix}",
+        description=f"사이클 {cycle_number} 검색을 시작합니다.",
+        color=COLOR_INFO,
+    )
+    embed.set_footer(text=f"재개 시간: {datetime.now().strftime('%H:%M:%S')}")
+    return embed
+
+
 def error_embed(message: str) -> discord.Embed:
     """에러 Embed."""
     return discord.Embed(

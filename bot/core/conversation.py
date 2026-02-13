@@ -21,6 +21,8 @@ from ..ui.embeds import (
     searching_embed,
     success_embed,
     waiting_embed,
+    rest_embed,
+    resume_embed,
     error_embed,
 )
 from ..ui.formatters import format_train_for_select, format_reservation_detail, format_trains_summary
@@ -646,10 +648,28 @@ class ConversationManager:
             )
             await self.channel.send(embed=embed)
 
+        async def on_rest(rest_minutes: int, cycle_info: str) -> None:
+            await self.channel.send(
+                embed=rest_embed(
+                    self.session.rail_type, rest_minutes, cycle_info,
+                    leg_label=leg_label,
+                )
+            )
+
+        async def on_resume(cycle_number: int) -> None:
+            await self.channel.send(
+                embed=resume_embed(
+                    self.session.rail_type, cycle_number,
+                    leg_label=leg_label,
+                )
+            )
+
         self._polling_task = asyncio.create_task(
             self.engine.polling_loop(
                 self.session, on_progress, on_success, on_error, self.bot,
                 on_waiting=on_waiting,
+                on_rest=on_rest,
+                on_resume=on_resume,
             )
         )
 
@@ -800,14 +820,30 @@ class ConversationManager:
                 )
                 await self.channel.send(embed=embed)
 
-            return status_msg_holder, on_progress, on_success, on_error, on_waiting
+            async def on_rest(rest_minutes: int, cycle_info: str) -> None:
+                await self.channel.send(
+                    embed=rest_embed(
+                        session.rail_type, rest_minutes, cycle_info,
+                        leg_label=label,
+                    )
+                )
+
+            async def on_resume(cycle_number: int) -> None:
+                await self.channel.send(
+                    embed=resume_embed(
+                        session.rail_type, cycle_number,
+                        leg_label=label,
+                    )
+                )
+
+            return status_msg_holder, on_progress, on_success, on_error, on_waiting, on_rest, on_resume
 
         # 가는 편 콜백
-        out_holder, out_progress, out_success, out_error, out_waiting = _make_callbacks(
+        out_holder, out_progress, out_success, out_error, out_waiting, out_rest, out_resume = _make_callbacks(
             self.session, "가는 편"
         )
         # 오는 편 콜백
-        ret_holder, ret_progress, ret_success, ret_error, ret_waiting = _make_callbacks(
+        ret_holder, ret_progress, ret_success, ret_error, ret_waiting, ret_rest, ret_resume = _make_callbacks(
             self._return_session, "오는 편"
         )
 
@@ -831,12 +867,16 @@ class ConversationManager:
             self.engine.polling_loop(
                 self.session, out_progress, out_success, out_error, self.bot,
                 on_waiting=out_waiting,
+                on_rest=out_rest,
+                on_resume=out_resume,
             )
         )
         self._return_polling_task = asyncio.create_task(
             self.engine.polling_loop(
                 self._return_session, ret_progress, ret_success, ret_error, self.bot,
                 on_waiting=ret_waiting,
+                on_rest=ret_rest,
+                on_resume=ret_resume,
             )
         )
 

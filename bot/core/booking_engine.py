@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
-from random import gammavariate
+from random import gammavariate, randint, uniform
 from typing import Any, TYPE_CHECKING
 
 from .booking_session import BookingSession, PassengerInfo, SessionStatus
@@ -36,10 +36,10 @@ from srtgo.ktx import (
 )
 
 
-# 감마분포 기반 랜덤 대기 파라미터
-POLL_SHAPE = 4.0
-POLL_SCALE = 0.25
-POLL_MIN = 0.5
+# 감마분포 기반 랜덤 대기 파라미터 (기본값, Config로 오버라이드 됨)
+POLL_SHAPE = 5.0
+POLL_SCALE = 0.5
+POLL_MIN = 1.5
 
 
 def _build_passengers_srt(info: PassengerInfo) -> list:
@@ -256,6 +256,33 @@ class BookingEngine:
         """예약 취소."""
         return await self._run_sync(session.rail_client.cancel, reservation)
 
+    def _random_delay(self, bot: SRTGoBot) -> float:
+        """감마분포 기반 랜덤 대기 시간 생성 (초)."""
+        cfg = bot.config
+        return gammavariate(cfg.poll_interval_shape, cfg.poll_interval_scale) + cfg.poll_interval_min
+
+    def _next_micro_break_count(self, bot: SRTGoBot) -> int:
+        """다음 미세 휴식까지의 요청 횟수 (랜덤)."""
+        cfg = bot.config
+        return randint(cfg.micro_break_interval_min, cfg.micro_break_interval_max)
+
+    def _micro_break_duration(self, bot: SRTGoBot) -> float:
+        """미세 휴식 시간 (랜덤, 초)."""
+        cfg = bot.config
+        return uniform(cfg.micro_break_duration_min, cfg.micro_break_duration_max)
+
+    def _active_duration(self, bot: SRTGoBot) -> float:
+        """활동 시간 (기준값 ± jitter%, 초). 매 사이클마다 다른 값."""
+        cfg = bot.config
+        base = cfg.poll_active_minutes * 60
+        jitter = cfg.poll_active_jitter
+        return uniform(base * (1 - jitter), base * (1 + jitter))
+
+    def _rest_duration(self, bot: SRTGoBot) -> float:
+        """활동/휴식 사이클의 휴식 시간 (랜덤, 초)."""
+        cfg = bot.config
+        return uniform(cfg.poll_rest_minutes_min * 60, cfg.poll_rest_minutes_max * 60)
+
     async def polling_loop(
         self,
         session: BookingSession,
@@ -264,27 +291,123 @@ class BookingEngine:
         on_error: Any,     # Callable[[str], Awaitable]
         bot: SRTGoBot,
         on_waiting: Any = None,  # Callable[[Any], Awaitable] - 예약대기 콜백
+        on_rest: Any = None,     # Callable[[int, str], Awaitable] - 휴식 시작 콜백
+        on_resume: Any = None,   # Callable[[int], Awaitable] - 검색 재개 콜백
     ) -> None:
-        """예매 폴링 루프.
+        """예매 폴링 루프 (매크로 회피 기능 포함).
 
         기존 srtgo.py의 reserve() 루프를 비동기로 재현.
         예약대기(standby) 확보 시 on_waiting 호출 후 확정 좌석을 계속 검색한다.
+
+        매크로 회피 전략:
+        1. 감마분포 기반 랜덤 대기 (요청마다)
+        2. 미세 휴식: N회 요청마다 10~45초 대기
+        3. 활동/휴식 사이클: 활성 검색 → 장시간 휴식 → 반복
+        4. 최대 시간 제한: 전체 검색 시간 초과 시 자동 종료
         """
         is_srt = session.rail_type == "SRT"
+        cfg = bot.config
         session.status = SessionStatus.SEARCHING
         await bot.session_repo.set_status(session.session_id, "searching")
 
-        start_time = time.time()
+        total_start_time = time.time()
+        cycle_start_time = time.time()
+        current_active_limit = self._active_duration(bot)  # 이번 사이클 활동 시간 (±jitter)
         has_waiting = False  # 예약대기 확보 여부
+        cycle_count = 0      # 현재 사이클 번호
+        requests_since_break = 0  # 미세 휴식 이후 요청 수
+        next_break_at = self._next_micro_break_count(bot)  # 다음 미세 휴식까지 요청 수
 
         while session.status == SessionStatus.SEARCHING:
             try:
+                # ── 전체 시간 제한 확인 ──
+                total_elapsed = time.time() - total_start_time
+                if cfg.poll_max_hours > 0 and total_elapsed >= cfg.poll_max_hours * 3600:
+                    log.info(
+                        "최대 검색 시간 초과 (%.1f시간): 세션 %s 종료",
+                        cfg.poll_max_hours, session.session_id,
+                    )
+                    session.status = SessionStatus.TIMEOUT
+                    await bot.session_repo.set_status(session.session_id, "timeout")
+                    await on_error(
+                        f"최대 검색 시간({cfg.poll_max_hours}시간)이 초과되어 자동 종료됩니다."
+                    )
+                    return
+
+                # ── 활동/휴식 사이클 확인 ──
+                cycle_elapsed = time.time() - cycle_start_time
+                if cfg.poll_active_minutes > 0 and cycle_elapsed >= current_active_limit:
+                    cycle_count += 1
+                    active_mins = int(current_active_limit / 60)
+
+                    # 최대 사이클 수 확인
+                    if cfg.poll_max_cycles > 0 and cycle_count >= cfg.poll_max_cycles:
+                        log.info(
+                            "최대 사이클 초과 (%d회): 세션 %s 종료",
+                            cfg.poll_max_cycles, session.session_id,
+                        )
+                        session.status = SessionStatus.TIMEOUT
+                        await bot.session_repo.set_status(session.session_id, "timeout")
+                        await on_error(
+                            f"최대 검색 사이클({cfg.poll_max_cycles}회)이 초과되어 자동 종료됩니다."
+                        )
+                        return
+
+                    # 휴식 진입
+                    rest_secs = self._rest_duration(bot)
+                    rest_mins = int(rest_secs / 60)
+                    log.info(
+                        "세션 %s: %d분 활동 후 약 %d분 휴식 (사이클 %d)",
+                        session.session_id, active_mins, rest_mins, cycle_count,
+                    )
+
+                    if on_rest:
+                        await on_rest(rest_mins, f"사이클 {cycle_count}")
+
+                    await asyncio.sleep(rest_secs)
+
+                    # 휴식 후 재로그인 (세션 만료 방지)
+                    try:
+                        creds = await bot.user_repo.get_credentials(
+                            session.discord_id, session.rail_type
+                        )
+                        if creds:
+                            session.rail_client = await self.login(
+                                session.rail_type, creds[0], creds[1]
+                            )
+                    except Exception:
+                        log.exception("휴식 후 재로그인 실패")
+                        session.status = SessionStatus.ERROR
+                        await on_error("휴식 후 재로그인 실패")
+                        return
+
+                    cycle_start_time = time.time()
+                    current_active_limit = self._active_duration(bot)  # 새 사이클마다 다른 활동 시간
+                    requests_since_break = 0
+                    next_break_at = self._next_micro_break_count(bot)
+
+                    if on_resume:
+                        await on_resume(cycle_count + 1)
+
+                # ── 미세 휴식 확인 ──
+                requests_since_break += 1
+                if requests_since_break >= next_break_at:
+                    break_duration = self._micro_break_duration(bot)
+                    log.debug(
+                        "세션 %s: 미세 휴식 %.1f초 (%d회 요청 후)",
+                        session.session_id, break_duration, requests_since_break,
+                    )
+                    await asyncio.sleep(break_duration)
+                    requests_since_break = 0
+                    next_break_at = self._next_micro_break_count(bot)
+
+                # ── 실제 검색/예약 로직 ──
                 session.attempt_count += 1
                 await bot.session_repo.increment_attempt(session.session_id)
 
                 # 진행 상태 업데이트 (10회마다)
                 if session.attempt_count % 10 == 0:
-                    elapsed = time.time() - start_time
+                    elapsed = time.time() - total_start_time
                     hours, remainder = divmod(int(elapsed), 3600)
                     minutes, seconds = divmod(remainder, 60)
                     elapsed_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
@@ -341,10 +464,8 @@ class BookingEngine:
                                 await on_success(reservation)
                                 return
 
-                # 감마분포 기반 대기
-                await asyncio.sleep(
-                    gammavariate(POLL_SHAPE, POLL_SCALE) + POLL_MIN
-                )
+                # 감마분포 기반 랜덤 대기
+                await asyncio.sleep(self._random_delay(bot))
 
             except (SRTError, KorailError) as ex:
                 msg = str(ex)
@@ -393,9 +514,7 @@ class BookingEngine:
                         await on_error(f"예매 오류: {msg}")
                         return
 
-                await asyncio.sleep(
-                    gammavariate(POLL_SHAPE, POLL_SCALE) + POLL_MIN
-                )
+                await asyncio.sleep(self._random_delay(bot))
 
             except asyncio.CancelledError:
                 session.status = SessionStatus.CANCELLED
@@ -418,6 +537,4 @@ class BookingEngine:
                     await on_error(f"예기치 않은 오류: {ex}")
                     return
 
-                await asyncio.sleep(
-                    gammavariate(POLL_SHAPE, POLL_SCALE) + POLL_MIN
-                )
+                await asyncio.sleep(self._random_delay(bot))

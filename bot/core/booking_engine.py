@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
-from random import gammavariate, randint, uniform
+from random import choice as random_choice, gammavariate, randint, uniform
 from typing import Any, TYPE_CHECKING
 
 from .booking_session import BookingSession, PassengerInfo, SessionStatus
@@ -136,6 +136,8 @@ class BookingEngine:
 
     def __init__(self, executor: ThreadPoolExecutor) -> None:
         self._executor = executor
+        self._proxy_servers: list[str] = []
+        self._proxy_index: int = 0
 
     async def _run_sync(self, func, *args, **kwargs):
         """동기 함수를 비동기로 실행."""
@@ -144,12 +146,52 @@ class BookingEngine:
             self._executor, lambda: func(*args, **kwargs)
         )
 
-    async def login(self, rail_type: str, user_id: str, user_pw: str, verbose: bool = False):
-        """로그인하여 클라이언트 반환."""
+    def _get_proxy_url(self, bot: SRTGoBot) -> str | None:
+        """현재 프록시 URL 반환. 비활성화 시 None."""
+        cfg = bot.config
+        if not cfg.proxy_enabled or not cfg.proxy_servers:
+            return None
+
+        if not self._proxy_servers:
+            self._proxy_servers = [
+                s.strip() for s in cfg.proxy_servers.split(",") if s.strip()
+            ]
+
+        if not self._proxy_servers:
+            return None
+
+        server = self._proxy_servers[self._proxy_index % len(self._proxy_servers)]
+        return f"socks5://{cfg.proxy_user}:{cfg.proxy_pass}@{server}:{cfg.proxy_port}"
+
+    def _rotate_proxy(self, bot: SRTGoBot) -> None:
+        """다음 프록시 서버로 로테이션."""
+        if bot.config.proxy_rotate and self._proxy_servers:
+            self._proxy_index = (self._proxy_index + 1) % len(self._proxy_servers)
+            log.info("프록시 로테이션: %s", self._proxy_servers[self._proxy_index])
+
+    def _apply_proxy(self, client, bot: SRTGoBot) -> None:
+        """로그인된 클라이언트에 프록시 설정 적용."""
+        proxy_url = self._get_proxy_url(bot)
+        if proxy_url and hasattr(client, "_session"):
+            client._session.proxies = {
+                "http": proxy_url,
+                "https": proxy_url,
+            }
+            log.info("프록시 적용: %s", proxy_url.split("@")[-1])
+
+    async def login(
+        self, rail_type: str, user_id: str, user_pw: str,
+        verbose: bool = False, bot: SRTGoBot | None = None,
+    ):
+        """로그인하여 클라이언트 반환. 프록시 설정도 적용."""
         if rail_type == "SRT":
-            return await self._run_sync(SRT, user_id, user_pw, True, verbose)
+            client = await self._run_sync(SRT, user_id, user_pw, True, verbose)
         else:
-            return await self._run_sync(Korail, user_id, user_pw, True, verbose)
+            client = await self._run_sync(Korail, user_id, user_pw, True, verbose)
+
+        if bot:
+            self._apply_proxy(client, bot)
+        return client
 
     async def search_trains(self, session: BookingSession) -> list:
         """열차 검색. 복수 시간이 콤마로 구분되어 있으면 각각 검색 후 합산."""
@@ -373,13 +415,16 @@ class BookingEngine:
                         )
                         if creds:
                             session.rail_client = await self.login(
-                                session.rail_type, creds[0], creds[1]
+                                session.rail_type, creds[0], creds[1], bot=bot,
                             )
                     except Exception:
                         log.exception("휴식 후 재로그인 실패")
                         session.status = SessionStatus.ERROR
                         await on_error("휴식 후 재로그인 실패")
                         return
+
+                    # 프록시 로테이션 (휴식 후 새 IP로 전환)
+                    self._rotate_proxy(bot)
 
                     cycle_start_time = time.time()
                     current_active_limit = self._active_duration(bot)  # 새 사이클마다 다른 활동 시간
@@ -483,7 +528,7 @@ class BookingEngine:
                             )
                             if creds:
                                 session.rail_client = await self.login(
-                                    session.rail_type, creds[0], creds[1]
+                                    session.rail_type, creds[0], creds[1], bot=bot,
                                 )
                         except Exception:
                             log.exception("재로그인 실패")
@@ -530,7 +575,7 @@ class BookingEngine:
                     )
                     if creds:
                         session.rail_client = await self.login(
-                            session.rail_type, creds[0], creds[1]
+                            session.rail_type, creds[0], creds[1], bot=bot,
                         )
                 except Exception:
                     session.status = SessionStatus.ERROR

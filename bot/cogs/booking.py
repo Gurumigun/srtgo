@@ -80,7 +80,7 @@ class BookingCog(commands.Cog):
         # 로그인 시도
         await interaction.followup.send(f"{rail_type} 로그인 중...")
         try:
-            rail_client = await self.engine.login(rail_type, creds[0], creds[1])
+            rail_client = await self.engine.login(rail_type, creds[0], creds[1], bot=self.bot)
         except Exception as ex:
             await interaction.followup.send(embed=error_embed(f"로그인 실패: {ex}"))
             return

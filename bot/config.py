@@ -49,6 +49,14 @@ class Config:
     poll_max_hours: float = 0            # 최대 총 검색 시간 (시간, 0=무제한)
     poll_max_cycles: int = 0             # 최대 활동/휴식 사이클 수 (0=무제한)
 
+    # VPN/프록시 (NordVPN SOCKS5)
+    proxy_enabled: bool = False
+    proxy_user: str = ""          # NordVPN 서비스 사용자명
+    proxy_pass: str = ""          # NordVPN 서비스 비밀번호
+    proxy_servers: str = ""       # 콤마 구분 서버 목록 (예: "seoul.socks.nordhold.net,tokyo.socks.nordhold.net")
+    proxy_port: int = 1080        # SOCKS5 포트
+    proxy_rotate: bool = True     # 사이클마다 프록시 서버 로테이션
+
     # ThreadPool
     thread_pool_workers: int = 8
 
@@ -80,6 +88,13 @@ class Config:
             # 전체 제한
             poll_max_hours=float(os.environ.get("POLL_MAX_HOURS", "0")),
             poll_max_cycles=int(os.environ.get("POLL_MAX_CYCLES", "0")),
+            # VPN/프록시
+            proxy_enabled=os.environ.get("PROXY_ENABLED", "").lower() in ("true", "1", "yes"),
+            proxy_user=os.environ.get("PROXY_USER", ""),
+            proxy_pass=os.environ.get("PROXY_PASS", ""),
+            proxy_servers=os.environ.get("PROXY_SERVERS", ""),
+            proxy_port=int(os.environ.get("PROXY_PORT", "1080")),
+            proxy_rotate=os.environ.get("PROXY_ROTATE", "true").lower() in ("true", "1", "yes"),
         )
 
     def validate(self) -> list[str]:

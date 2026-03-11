@@ -736,7 +736,7 @@ class ConversationManager:
         creds = await self.bot.user_repo.get_credentials(old.discord_id, old.rail_type)
         if not creds:
             raise ValueError("계정 정보를 찾을 수 없습니다")
-        return_client = await self.engine.login(old.rail_type, creds[0], creds[1])
+        return_client = await self.engine.login(old.rail_type, creds[0], creds[1], bot=self.bot)
 
         session = BookingSession(
             session_id=new_session_id,

@@ -42,8 +42,8 @@ class Config:
     # 활동/휴식 사이클: 일정 시간 검색 후 장시간 휴식
     poll_active_minutes: int = 60        # 활성 검색 기준 시간 (분), 매 사이클 ±15% 편차
     poll_active_jitter: float = 0.15     # 활성 검색 시간 편차 비율 (0.15 = ±15%)
-    poll_rest_minutes_min: int = 60      # 휴식 최소 시간 (분) = 1시간
-    poll_rest_minutes_max: int = 180     # 휴식 최대 시간 (분) = 3시간
+    poll_rest_minutes_min: int = 30      # 휴식 최소 시간 (분) = 30분
+    poll_rest_minutes_max: int = 90      # 휴식 최대 시간 (분) = 1시간 30분
 
     # 전체 검색 제한
     poll_max_hours: float = 0            # 최대 총 검색 시간 (시간, 0=무제한)
@@ -75,8 +75,8 @@ class Config:
             # 활동/휴식 사이클
             poll_active_minutes=int(os.environ.get("POLL_ACTIVE_MINUTES", "60")),
             poll_active_jitter=float(os.environ.get("POLL_ACTIVE_JITTER", "0.15")),
-            poll_rest_minutes_min=int(os.environ.get("POLL_REST_MINUTES_MIN", "60")),
-            poll_rest_minutes_max=int(os.environ.get("POLL_REST_MINUTES_MAX", "180")),
+            poll_rest_minutes_min=int(os.environ.get("POLL_REST_MINUTES_MIN", "30")),
+            poll_rest_minutes_max=int(os.environ.get("POLL_REST_MINUTES_MAX", "90")),
             # 전체 제한
             poll_max_hours=float(os.environ.get("POLL_MAX_HOURS", "0")),
             poll_max_cycles=int(os.environ.get("POLL_MAX_CYCLES", "0")),

@@ -11,6 +11,7 @@ services:
       - VPN_TYPE=openvpn
       - OPENVPN_USER=${NORDVPN_USER}
       - OPENVPN_PASSWORD=${NORDVPN_PASS}
+      - OPENVPN_PROTOCOL=tcp
       - SERVER_COUNTRIES=South Korea
       - SOCKS5=on
       - SOCKS5_ADDRESS=:1080

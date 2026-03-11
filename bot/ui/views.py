@@ -421,6 +421,22 @@ class FavoriteRouteSelectView(ui.View):
         self.selected_value = None
 
 
+class StopBookingView(ui.View):
+    """폴링 중 종료 버튼."""
+
+    def __init__(self, timeout: float | None = None) -> None:
+        super().__init__(timeout=timeout)
+        self.stopped: bool = False
+
+    @ui.button(label="예매 종료", style=discord.ButtonStyle.danger, emoji="\u23F9")
+    async def stop_booking(self, interaction: discord.Interaction, button: ui.Button) -> None:
+        self.stopped = True
+        button.disabled = True
+        button.label = "종료 중..."
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+
 class FavoriteDeleteSelect(ui.Select):
     """즐겨찾기 삭제용 선택 드롭다운."""
 

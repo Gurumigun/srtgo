@@ -37,6 +37,7 @@ from ..ui.views import (
     StartCancelView,
     FavoriteRouteSelectView,
     TripTypeView,
+    StopBookingView,
 )
 
 if TYPE_CHECKING:
@@ -123,6 +124,7 @@ class ConversationManager:
         self._legs_done: int = 0
         self._legs_total: int = 1  # 편도=1, 왕복=2
         self._cleanup_done: bool = False
+        self._active_view: discord.ui.View | None = None  # 현재 활성 View (취소 시 정리용)
 
     async def start(self) -> None:
         """대화 시작."""
@@ -211,8 +213,10 @@ class ConversationManager:
             return
 
         view = FavoriteRouteSelectView(routes, timeout=self.bot.config.conversation_timeout)
+        self._active_view = view
         await self.channel.send("노선을 선택하세요:", view=view)
         await view.wait()
+        self._active_view = None
 
         if view.selected_value is None:
             await self._timeout()
@@ -236,8 +240,10 @@ class ConversationManager:
     async def _step_station(self, prompt: str, is_departure: bool) -> None:
         stations = STATIONS[self.session.rail_type]
         view = StationSelectView(stations, prompt, timeout=self.bot.config.conversation_timeout)
+        self._active_view = view
         await self.channel.send(prompt, view=view)
         await view.wait()
+        self._active_view = None
 
         if view.selected_value is None:
             await self._timeout()
@@ -259,8 +265,10 @@ class ConversationManager:
     async def _step_trip_type(self) -> None:
         """편도/왕복 선택 단계."""
         view = TripTypeView(timeout=self.bot.config.conversation_timeout)
+        self._active_view = view
         await self.channel.send("편도/왕복을 선택하세요:", view=view)
         await view.wait()
+        self._active_view = None
 
         if view.selected_value is None:
             await self._timeout()
@@ -272,8 +280,10 @@ class ConversationManager:
 
     async def _step_date(self) -> None:
         view = DateSelectView(timeout=self.bot.config.conversation_timeout)
+        self._active_view = view
         await self.channel.send("날짜를 선택하세요:", view=view)
         await view.wait()
+        self._active_view = None
 
         if view.selected_value is None:
             await self._timeout()
@@ -285,8 +295,10 @@ class ConversationManager:
 
     async def _step_time(self) -> None:
         view = TimeSelectView(timeout=self.bot.config.conversation_timeout)
+        self._active_view = view
         await self.channel.send("출발 시간을 선택하세요 (복수 선택 가능):", view=view)
         await view.wait()
+        self._active_view = None
 
         if view.selected_values is None:
             await self._timeout()
@@ -299,8 +311,10 @@ class ConversationManager:
 
     async def _step_passengers(self) -> None:
         view = PassengerCountView(timeout=self.bot.config.conversation_timeout)
+        self._active_view = view
         await self.channel.send("승객 수를 선택하세요:", view=view)
         await view.wait()
+        self._active_view = None
 
         if not view.confirmed:
             await self._timeout()
@@ -352,8 +366,10 @@ class ConversationManager:
     async def _step_train_select(self) -> None:
         trains_data = getattr(self, "_trains_data", [])
         view = TrainSelectView(trains_data, timeout=self.bot.config.conversation_timeout)
+        self._active_view = view
         await self.channel.send("예매할 열차를 선택하세요 (복수 선택 가능):", view=view)
         await view.wait()
+        self._active_view = None
 
         if view.selected_values is None:
             await self._timeout()
@@ -365,8 +381,10 @@ class ConversationManager:
 
     async def _step_seat_type(self) -> None:
         view = SeatTypeView(timeout=self.bot.config.conversation_timeout)
+        self._active_view = view
         await self.channel.send("좌석 유형을 선택하세요:", view=view)
         await view.wait()
+        self._active_view = None
 
         if view.selected_value is None:
             await self._timeout()
@@ -381,8 +399,10 @@ class ConversationManager:
         card_info = await self.bot.user_repo.get_card_info(self.session.discord_id)
         if card_info:
             view = ConfirmView(timeout=self.bot.config.conversation_timeout)
+            self._active_view = view
             await self.channel.send("예매 성공 시 자동으로 카드 결제하시겠습니까?", view=view)
             await view.wait()
+            self._active_view = None
 
             if view.result is None:
                 await self._timeout()
@@ -407,8 +427,10 @@ class ConversationManager:
             f"(**{self.session.arrival}** → **{self.session.departure}**)"
         )
         view = DateSelectView(timeout=self.bot.config.conversation_timeout)
+        self._active_view = view
         await self.channel.send("오는 편 날짜를 선택하세요:", view=view)
         await view.wait()
+        self._active_view = None
 
         if view.selected_value is None:
             await self._timeout()
@@ -421,8 +443,10 @@ class ConversationManager:
     async def _step_return_time(self) -> None:
         """오는 편 시간 선택."""
         view = TimeSelectView(timeout=self.bot.config.conversation_timeout)
+        self._active_view = view
         await self.channel.send("오는 편 출발 시간을 선택하세요 (복수 선택 가능):", view=view)
         await view.wait()
+        self._active_view = None
 
         if view.selected_values is None:
             await self._timeout()
@@ -489,8 +513,10 @@ class ConversationManager:
         view = TrainSelectView(
             self._return_trains_data, timeout=self.bot.config.conversation_timeout
         )
+        self._active_view = view
         await self.channel.send("오는 편 열차를 선택하세요 (복수 선택 가능):", view=view)
         await view.wait()
+        self._active_view = None
 
         if view.selected_values is None:
             await self._timeout()
@@ -551,8 +577,10 @@ class ConversationManager:
             await self.channel.send(embed=return_embed)
 
         view = StartCancelView(timeout=self.bot.config.conversation_timeout)
+        self._active_view = view
         await self.channel.send("위 내용으로 예매를 시작하시겠습니까?", view=view)
         await view.wait()
+        self._active_view = None
 
         if view.result is None or not view.result:
             await self._cancel("예매가 취소되었습니다.")
@@ -585,12 +613,24 @@ class ConversationManager:
 
     async def _run_single_booking(self, leg_label: str = "") -> None:
         """편도 예매 폴링 루프."""
+        # 종료 버튼 View 생성
+        stop_view = StopBookingView(timeout=None)
+        self._active_view = stop_view
         status_msg = await self.channel.send(
             embed=searching_embed(
                 self.session.rail_type, 0, "00:00:00", leg_label=leg_label,
-            )
+            ),
+            view=stop_view,
         )
         self.session.status_message = status_msg
+
+        # 종료 버튼 감지 태스크
+        async def _watch_stop_button() -> None:
+            await stop_view.wait()
+            if stop_view.stopped:
+                await self._cancel("사용자가 예매를 종료하였습니다.")
+
+        asyncio.create_task(_watch_stop_button())
 
         async def on_progress(attempt: int, elapsed: str) -> None:
             try:
@@ -847,6 +887,10 @@ class ConversationManager:
             self._return_session, "오는 편"
         )
 
+        # 종료 버튼 View 생성
+        stop_view = StopBookingView(timeout=None)
+        self._active_view = stop_view
+
         # 상태 메시지 생성
         out_msg = await self.channel.send(
             embed=searching_embed(self.session.rail_type, 0, "00:00:00", leg_label="가는 편")
@@ -861,6 +905,17 @@ class ConversationManager:
         )
         self._return_session.status_message = ret_msg
         ret_holder.append(ret_msg)
+
+        # 종료 버튼 메시지
+        await self.channel.send("예매를 종료하려면 아래 버튼을 누르세요:", view=stop_view)
+
+        # 종료 버튼 감지 태스크
+        async def _watch_stop_button() -> None:
+            await stop_view.wait()
+            if stop_view.stopped:
+                await self._cancel("사용자가 예매를 종료하였습니다.")
+
+        asyncio.create_task(_watch_stop_button())
 
         # 두 폴링 태스크 동시 시작
         self._polling_task = asyncio.create_task(
@@ -904,6 +959,10 @@ class ConversationManager:
 
     async def _cancel(self, message: str) -> None:
         """예매 취소."""
+        # 활성 View 정리 (버튼/셀렉트 비활성화)
+        if self._active_view and not self._active_view.is_finished():
+            self._active_view.stop()
+
         if self._polling_task and not self._polling_task.done():
             self._polling_task.cancel()
         if self._return_polling_task and not self._return_polling_task.done():

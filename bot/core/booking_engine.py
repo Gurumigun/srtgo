@@ -161,7 +161,9 @@ class BookingEngine:
             return None
 
         server = self._proxy_servers[self._proxy_index % len(self._proxy_servers)]
-        return f"socks5://{cfg.proxy_user}:{cfg.proxy_pass}@{server}:{cfg.proxy_port}"
+        if cfg.proxy_user and cfg.proxy_pass:
+            return f"socks5://{cfg.proxy_user}:{cfg.proxy_pass}@{server}:{cfg.proxy_port}"
+        return f"socks5://{server}:{cfg.proxy_port}"
 
     def _rotate_proxy(self, bot: SRTGoBot) -> None:
         """다음 프록시 서버로 로테이션."""
@@ -177,7 +179,7 @@ class BookingEngine:
                 "http": proxy_url,
                 "https": proxy_url,
             }
-            log.info("프록시 적용: %s", proxy_url.split("@")[-1])
+            log.info("프록시 적용: %s", proxy_url.split("@")[-1] if "@" in proxy_url else proxy_url.split("//")[-1])
 
     async def login(
         self, rail_type: str, user_id: str, user_pw: str,

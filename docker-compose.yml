@@ -1,4 +1,23 @@
 services:
+  gluetun:
+    image: qmcgaw/gluetun
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=nordvpn
+      - VPN_TYPE=openvpn
+      - OPENVPN_USER=${NORDVPN_USER}
+      - OPENVPN_PASSWORD=${NORDVPN_PASS}
+      - SERVER_COUNTRIES=South Korea
+      - SOCKS5=on
+      - SOCKS5_ADDRESS=:1080
+    ports:
+      - "1080:1080"
+    restart: unless-stopped
+
   srtgo-bot:
     build: .
     container_name: srtgo-bot
@@ -9,6 +28,11 @@ services:
       - bot-data:/app/data
     environment:
       - SRTGO_DB_PATH=/app/data/srtgo.db
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    depends_on:
+      - gluetun
 
 volumes:
   bot-data:

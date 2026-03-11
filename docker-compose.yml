@@ -14,8 +14,7 @@ services:
       - SERVER_COUNTRIES=South Korea
       - SOCKS5=on
       - SOCKS5_ADDRESS=:1080
-    ports:
-      - "1080:1080"
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
     restart: unless-stopped
 
   srtgo-bot:

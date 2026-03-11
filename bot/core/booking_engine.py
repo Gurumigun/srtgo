@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 from random import choice as random_choice, gammavariate, randint, uniform
 from typing import Any, TYPE_CHECKING
 
+import requests as req_lib
+
 from .booking_session import BookingSession, PassengerInfo, SessionStatus
 
 if TYPE_CHECKING:
@@ -170,6 +172,49 @@ class BookingEngine:
         if bot.config.proxy_rotate and self._proxy_servers:
             self._proxy_index = (self._proxy_index + 1) % len(self._proxy_servers)
             log.info("프록시 로테이션: %s", self._proxy_servers[self._proxy_index])
+
+    async def _rotate_gluetun_ip(self, bot: SRTGoBot) -> None:
+        """Gluetun API로 VPN 재연결하여 IP 변경."""
+        api_url = bot.config.gluetun_api_url
+        if not api_url:
+            return
+
+        loop = asyncio.get_event_loop()
+        try:
+            # VPN 중지
+            await loop.run_in_executor(self._executor, lambda: req_lib.put(
+                f"{api_url}/v1/vpn/status",
+                json={"status": "stopped"},
+                timeout=10,
+            ))
+            log.info("Gluetun VPN 중지 요청")
+
+            await asyncio.sleep(3)
+
+            # VPN 재시작 → 다른 서버로 연결됨
+            await loop.run_in_executor(self._executor, lambda: req_lib.put(
+                f"{api_url}/v1/vpn/status",
+                json={"status": "running"},
+                timeout=10,
+            ))
+            log.info("Gluetun VPN 재시작 요청")
+
+            # VPN 연결 대기
+            await asyncio.sleep(10)
+
+            # 새 IP 확인
+            resp = await loop.run_in_executor(self._executor, lambda: req_lib.get(
+                f"{api_url}/v1/publicip/ip",
+                timeout=10,
+            ))
+            if resp.ok:
+                new_ip = resp.json().get("public_ip", "알 수 없음")
+                log.info("Gluetun IP 변경 완료: %s", new_ip)
+            else:
+                log.info("Gluetun IP 변경 완료 (IP 확인 실패)")
+
+        except Exception:
+            log.warning("Gluetun IP 변경 실패, 기존 연결 유지")
 
     def _apply_proxy(self, client, bot: SRTGoBot) -> None:
         """로그인된 클라이언트에 프록시 설정 적용."""
@@ -407,6 +452,9 @@ class BookingEngine:
 
                     if on_rest:
                         await on_rest(rest_mins, f"사이클 {cycle_count}")
+
+                    # 휴식 시작 전 Gluetun IP 변경 (다음 사이클 준비)
+                    await self._rotate_gluetun_ip(bot)
 
                     await asyncio.sleep(rest_secs)
 

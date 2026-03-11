@@ -56,6 +56,7 @@ class Config:
     proxy_servers: str = ""       # 콤마 구분 서버 목록 (예: "seoul.socks.nordhold.net,tokyo.socks.nordhold.net")
     proxy_port: int = 1080        # SOCKS5 포트
     proxy_rotate: bool = True     # 사이클마다 프록시 서버 로테이션
+    gluetun_api_url: str = ""     # Gluetun 제어 API (예: "http://gluetun:8000")
 
     # ThreadPool
     thread_pool_workers: int = 8
@@ -95,6 +96,7 @@ class Config:
             proxy_servers=os.environ.get("PROXY_SERVERS", ""),
             proxy_port=int(os.environ.get("PROXY_PORT", "1080")),
             proxy_rotate=os.environ.get("PROXY_ROTATE", "true").lower() in ("true", "1", "yes"),
+            gluetun_api_url=os.environ.get("GLUETUN_API_URL", ""),
         )
 
     def validate(self) -> list[str]:

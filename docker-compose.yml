@@ -17,7 +17,7 @@ services:
       - FIREWALL=off
       - SOCKS5=on
       - SOCKS5_ADDRESS=:1080
-      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_ADDRESS=:8090
     restart: unless-stopped
 
   srtgo-bot:

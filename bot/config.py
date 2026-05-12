@@ -15,6 +15,7 @@ class Config:
     discord_token: str = ""
     main_channel_id: int = 0
     category_id: int = 0
+    success_share_channel_id: int = 1467725573534257388
 
     # 보안
     master_key: str = ""  # 64자리 hex (32바이트)
@@ -67,6 +68,9 @@ class Config:
             discord_token=os.environ.get("DISCORD_TOKEN", ""),
             main_channel_id=int(os.environ.get("MAIN_CHANNEL_ID", "0")),
             category_id=int(os.environ.get("CATEGORY_ID", "0")),
+            success_share_channel_id=int(
+                os.environ.get("SUCCESS_SHARE_CHANNEL_ID", "1467725573534257388")
+            ),
             master_key=os.environ.get("SRTGO_MASTER_KEY", ""),
             db_path=os.environ.get("SRTGO_DB_PATH", "data/srtgo.db"),
             max_slots=int(os.environ.get("MAX_SLOTS", "4")),

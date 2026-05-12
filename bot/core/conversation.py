@@ -652,6 +652,9 @@ class ConversationManager:
                 leg_label=leg_label,
             )
             await self.channel.send(embed=embed)
+            await self._share_success_message(
+                embed, self.session, leg_label=leg_label
+            )
 
             # 자동 결제
             if self.session.auto_pay:
@@ -819,6 +822,7 @@ class ConversationManager:
                     leg_label=label,
                 )
                 await self.channel.send(embed=embed)
+                await self._share_success_message(embed, session, leg_label=label)
 
                 # 자동 결제
                 if session.auto_pay:
@@ -936,6 +940,47 @@ class ConversationManager:
         )
 
     # ──────────── 유틸리티 ────────────
+
+    async def _share_success_message(
+        self,
+        embed: discord.Embed,
+        session: BookingSession,
+        leg_label: str = "",
+    ) -> None:
+        """삭제되지 않는 공유 채널에 예매 성공 Embed를 복사 전송."""
+        target_channel_id = self.bot.config.success_share_channel_id
+        if not target_channel_id or target_channel_id == self.channel.id:
+            return
+
+        try:
+            target_channel = self.bot.get_channel(target_channel_id)
+            if target_channel is None:
+                target_channel = await self.bot.fetch_channel(target_channel_id)
+
+            send = getattr(target_channel, "send", None)
+            if not callable(send):
+                log.warning(
+                    "성공 공유 채널이 메시지 전송을 지원하지 않습니다: %s",
+                    target_channel_id,
+                )
+                return
+
+            shared_embed = embed.copy()
+            shared_embed.set_footer(
+                text=f"공유된 성공 메시지 | 원본 채널: #{self.channel.name}"
+            )
+            label = f" **{leg_label}**" if leg_label else ""
+            await send(
+                content=f"<@{session.discord_id}>{label} 예매 성공 메시지입니다.",
+                embed=shared_embed,
+                allowed_mentions=discord.AllowedMentions(
+                    users=True,
+                    roles=False,
+                    everyone=False,
+                ),
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            log.exception("예매 성공 메시지 공유 실패: 채널 %s", target_channel_id)
 
     def _reset_timeout(self) -> None:
         """타임아웃 타이머 리셋."""

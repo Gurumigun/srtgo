@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from json.decoder import JSONDecodeError
-from random import gammavariate
+from random import uniform
 from requests.exceptions import ConnectionError
 from termcolor import colored
 from typing import Awaitable, Callable, List, Optional, Tuple, Union
@@ -56,10 +56,9 @@ DEFAULT_STATIONS = {
     "KTX": ['서울', '대전', '동대구', '부산']
 }
 
-# 예약 간격 (평균 간격 (초) = SHAPE * SCALE)
-RESERVE_INTERVAL_SHAPE = 4
-RESERVE_INTERVAL_SCALE = 0.25
-RESERVE_INTERVAL_MIN = 0.5
+# 예약 시도 간격 (초)
+RESERVE_INTERVAL_MIN = 1.0
+RESERVE_INTERVAL_MAX = 5.0
 
 WAITING_BAR = ["|", "/", "-", "\\"]
 
@@ -566,7 +565,7 @@ def reserve(rail_type="SRT", debug=False):
             rail = login(rail_type, debug=debug)
 
 def _sleep():
-    time.sleep(gammavariate(RESERVE_INTERVAL_SHAPE, RESERVE_INTERVAL_SCALE) + RESERVE_INTERVAL_MIN)
+    time.sleep(uniform(RESERVE_INTERVAL_MIN, RESERVE_INTERVAL_MAX))
 
 def _handle_error(ex, msg=None):
     msg = msg or f"\nException: {ex}, Type: {type(ex)}, Message: {ex.msg if hasattr(ex, 'msg') else 'No message attribute'}"

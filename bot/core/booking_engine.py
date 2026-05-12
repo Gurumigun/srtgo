@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
-from random import choice as random_choice, gammavariate, randint, uniform
+from random import randint, uniform
 from typing import Any, TYPE_CHECKING
 
 import requests as req_lib
@@ -36,12 +36,6 @@ from srtgo.ktx import (
     ChildPassenger,
     SeniorPassenger,
 )
-
-
-# 감마분포 기반 랜덤 대기 파라미터 (기본값, Config로 오버라이드 됨)
-POLL_SHAPE = 5.0
-POLL_SCALE = 0.5
-POLL_MIN = 1.5
 
 
 def _build_passengers_srt(info: PassengerInfo) -> list:
@@ -346,9 +340,11 @@ class BookingEngine:
         return await self._run_sync(session.rail_client.cancel, reservation)
 
     def _random_delay(self, bot: SRTGoBot) -> float:
-        """감마분포 기반 랜덤 대기 시간 생성 (초)."""
+        """균등분포 기반 랜덤 대기 시간 생성 (초)."""
         cfg = bot.config
-        return gammavariate(cfg.poll_interval_shape, cfg.poll_interval_scale) + cfg.poll_interval_min
+        low = min(cfg.poll_interval_min, cfg.poll_interval_max)
+        high = max(cfg.poll_interval_min, cfg.poll_interval_max)
+        return uniform(low, high)
 
     def _next_micro_break_count(self, bot: SRTGoBot) -> int:
         """다음 미세 휴식까지의 요청 횟수 (랜덤)."""
@@ -370,7 +366,9 @@ class BookingEngine:
     def _rest_duration(self, bot: SRTGoBot) -> float:
         """활동/휴식 사이클의 휴식 시간 (랜덤, 초)."""
         cfg = bot.config
-        return uniform(cfg.poll_rest_minutes_min * 60, cfg.poll_rest_minutes_max * 60)
+        low = min(cfg.poll_rest_minutes_min, cfg.poll_rest_minutes_max)
+        high = max(cfg.poll_rest_minutes_min, cfg.poll_rest_minutes_max)
+        return randint(low, high) * 60
 
     async def polling_loop(
         self,
@@ -389,7 +387,7 @@ class BookingEngine:
         예약대기(standby) 확보 시 on_waiting 호출 후 확정 좌석을 계속 검색한다.
 
         매크로 회피 전략:
-        1. 감마분포 기반 랜덤 대기 (요청마다)
+        1. 설정된 범위(기본 1~5초)의 균등 랜덤 대기 (요청마다)
         2. 미세 휴식: N회 요청마다 10~45초 대기
         3. 활동/휴식 사이클: 활성 검색 → 장시간 휴식 → 반복
         4. 최대 시간 제한: 전체 검색 시간 초과 시 자동 종료
@@ -559,7 +557,7 @@ class BookingEngine:
                                 await on_success(reservation)
                                 return
 
-                # 감마분포 기반 랜덤 대기
+                # 설정된 범위(기본 1~5초)의 균등 랜덤 대기
                 await asyncio.sleep(self._random_delay(bot))
 
             except (SRTError, KorailError) as ex:

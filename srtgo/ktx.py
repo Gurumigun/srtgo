@@ -6,11 +6,15 @@
     :license: BSD, see LICENSE for more details.
 """
 import base64
+from collections import deque
+import hashlib
 import itertools
 import json
+import random
 import re
 import requests
 import time
+import urllib.parse
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 from datetime import datetime, timedelta
@@ -23,6 +27,11 @@ PHONE_NUMBER_REGEX = re.compile(r"(\d{3})-(\d{3,4})-(\d{4})")
 
 USER_AGENT = "Dalvik/2.1.0 (Linux; U; Android 14; SM-S912N Build/UP1A.231005.007)"
 KORAIL_API_VERSION = "250601003"
+KORAIL_APP_PACKAGE = "com.korail.talk"
+KORAIL_APP_SIGNATURE = ""
+KORAIL_ANDROID_MODEL = "SM-S912N"
+KORAIL_ANDROID_RELEASE = "14"
+DYNAPATH_VERSION = "v1.0.3"
 
 DEFAULT_HEADERS = {
     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -31,6 +40,209 @@ DEFAULT_HEADERS = {
     "Connection": "Keep-Alive",
     "Accept-Encoding": "gzip"
 }
+
+
+class DynaPathTokenGenerator:
+    """Generate the KorailTalk DynaPath macro-protection header."""
+
+    ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    RANDOM_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    PRIMES = []
+
+    def __init__(self, device_id=None):
+        self.device_id = device_id or hashlib.sha256(str(random.random()).encode()).hexdigest()[:16]
+        self.init_timestamp = int(time.time() * 1000)
+        self.current_timestamp = None
+        self.recent_timestamps = deque(maxlen=5)
+
+    @classmethod
+    def _prime_sequence(cls):
+        if cls.PRIMES:
+            return cls.PRIMES
+
+        primes = [2]
+        candidate = 3
+        while len(primes) < 101:
+            limit = int(candidate ** 0.5)
+            if all(candidate % prime for prime in primes if prime <= limit):
+                primes.append(candidate)
+            candidate += 1
+
+        cls.PRIMES = primes[1:]
+        return cls.PRIMES
+
+    @classmethod
+    def _shuffle_alphabet(cls, text, multiplier, step):
+        sequence = cls._prime_sequence()
+        length = len(text)
+        block_size = 1
+        for value in sequence:
+            if value > length:
+                break
+            block_size = value
+
+        counts = [0] * block_size
+        chars = [""] * block_size
+        factor = 1
+        for index in range(block_size):
+            source_index = ((factor % block_size) * step) % block_size
+            counts[source_index] += 1
+            if counts[source_index] == 1:
+                chars[index] = text[source_index]
+            factor *= multiplier
+
+        shuffled = []
+        leftovers = []
+        for index, char in enumerate(chars):
+            if char:
+                shuffled.append(char)
+                continue
+            for source_index in range(block_size):
+                if counts[source_index] == 0:
+                    replacement = text[source_index]
+                    chars[index] = replacement
+                    leftovers.append(replacement)
+                    counts[source_index] = 1
+                    break
+
+        leftovers.extend(text[block_size:])
+        leftover_text = "".join(leftovers)
+        if len(leftover_text) < sequence[0]:
+            return "".join(shuffled) + leftover_text
+        return "".join(shuffled) + cls._shuffle_alphabet(leftover_text, multiplier, step)
+
+    @classmethod
+    def _alphabet_for(cls, number):
+        sequence = cls._prime_sequence()
+        return cls._shuffle_alphabet(
+            cls.ALPHABET,
+            sequence[number % 29],
+            sequence[(number // 29) % 29],
+        )
+
+    @staticmethod
+    def _encode_payload(text, alphabet, base=30, chunk_size=2):
+        values = []
+        for char in text:
+            codepoint = ord(char)
+            if codepoint < 128:
+                values.append(codepoint)
+            elif codepoint < 2048:
+                values.append(128 | ((codepoint >> 7) & 15))
+                values.append(codepoint & 127)
+            elif codepoint >= 262144:
+                values.extend([
+                    160,
+                    (codepoint >> 14) & 127,
+                    (codepoint >> 7) & 127,
+                    codepoint & 127,
+                ])
+            elif (63488 & codepoint) != 55296:
+                values.append(((codepoint >> 14) & 15) | 144)
+                values.append((codepoint >> 7) & 127)
+                values.append(codepoint & 127)
+
+        encoded = []
+        remainders = [0] * (chunk_size + 1)
+        trailing_count = len(values) % chunk_size
+        full_count = len(values) - trailing_count
+        index = 0
+
+        while index < full_count:
+            number = 0
+            for _ in range(chunk_size):
+                number = values[index] + (number * 161)
+                index += 1
+
+            for pos in range(chunk_size + 1):
+                remainders[pos] = number % base
+                number //= base
+
+            for pos in range(chunk_size, -1, -1):
+                encoded.append(alphabet[remainders[pos]])
+
+        if trailing_count:
+            number = 0
+            for _ in range(trailing_count):
+                number = (number * 161) + values[index]
+                index += 1
+
+            for pos in range(trailing_count + 1):
+                remainders[pos] = number % base
+                number //= base
+
+            for pos in range(trailing_count, -1, -1):
+                encoded.append(alphabet[remainders[pos]])
+
+        return "".join(encoded)
+
+    @staticmethod
+    def _quote(value):
+        return urllib.parse.quote_plus(str(value), safe="")
+
+    def _metadata(self):
+        current = self.current_timestamp or self.init_timestamp
+        fields = [
+            ("ai", KORAIL_APP_PACKAGE),
+            ("di", self.device_id),
+            ("as", KORAIL_APP_SIGNATURE),
+            ("su", "false"),
+            ("dbg", "false"),
+            ("emu", "false"),
+            ("hk", "false"),
+            ("it", str(self.init_timestamp)),
+            ("ts", str(current)),
+        ]
+        fields.extend(("rt", str(value)) for value in self.recent_timestamps)
+        fields.extend([
+            ("os", KORAIL_ANDROID_RELEASE),
+            ("dm", KORAIL_ANDROID_MODEL),
+            ("st", "Android"),
+            ("sv", DYNAPATH_VERSION),
+        ])
+        return "&".join(f"{self._quote(key)}={self._quote(value)}" for key, value in fields)
+
+    def generate(self):
+        now = int(time.time() * 1000)
+        previous = self.current_timestamp or self.init_timestamp
+        self.current_timestamp = now
+        self.recent_timestamps.append(now - previous)
+
+        base = 30
+        chunk_size = 2
+        alphabet = self._alphabet_for(1)
+        nonce = "".join(random.choice(self.RANDOM_ALPHABET) for _ in range(4))
+        token_meta = f"{DYNAPATH_VERSION}+{nonce}+{now}"
+
+        prefix = "b" + alphabet[2] + alphabet[37] + alphabet[chunk_size] + alphabet[base - 1]
+        encoded_meta = self._encode_payload(token_meta, alphabet, base, chunk_size)
+        header = prefix + alphabet[len(encoded_meta)] + encoded_meta
+
+        number = 0
+        for char in token_meta:
+            codepoint = ord(char)
+            bit = 32768
+            for _ in range(16):
+                if bit & codepoint:
+                    break
+                bit >>= 1
+            number = (number * (bit << 1)) + codepoint
+
+        permutation = []
+        for index in range(base):
+            remainder = number % (base - index)
+            used = set(permutation)
+            candidate_index = 0
+            for char in alphabet[:base]:
+                if char in used:
+                    continue
+                if candidate_index == remainder:
+                    permutation.append(char)
+                    break
+                candidate_index += 1
+            number //= base - index
+
+        return header + self._encode_payload(self._metadata(), "".join(permutation), base, chunk_size)
 
 KORAIL_MOBILE = "https://smart.letskorail.com:443/classes/com.korail.mobile"
 API_ENDPOINTS = {
@@ -403,6 +615,7 @@ class Korail:
         self._device = 'AD'
         self._version = KORAIL_API_VERSION
         self._key = 'korail1234567890'
+        self._dynapath = DynaPathTokenGenerator()
         self._idx = None
         self.korail_id = korail_id
         self.korail_pw = korail_pw
@@ -418,6 +631,9 @@ class Korail:
     def _log(self, msg: str) -> None:
         if self.verbose:
             print(f"[*] {msg}")
+
+    def _dynapath_headers(self):
+        return {"x-dynapath-m-token": self._dynapath.generate()}
 
     def __enc_password(self, password):
         url = API_ENDPOINTS["code"]
@@ -453,7 +669,7 @@ class Korail:
             'idx': self._idx
         }
 
-        r = self._session.post(API_ENDPOINTS["login"], data=data)
+        r = self._session.post(API_ENDPOINTS["login"], data=data, headers=self._dynapath_headers())
         self._log(r.text)
         j = json.loads(r.text)
 
@@ -549,7 +765,7 @@ class Korail:
             'trnGpCd1': ''
         }
 
-        r = self._session.post(API_ENDPOINTS["search_schedule"], data=data)
+        r = self._session.post(API_ENDPOINTS["search_schedule"], data=data, headers=self._dynapath_headers())
         self._log(r.text)
         j = json.loads(r.text)
 
@@ -663,7 +879,7 @@ class Korail:
             'txtPsgTpCd8': '1',
         }
 
-        r = self._session.post(API_ENDPOINTS["reserve"], data=data)
+        r = self._session.post(API_ENDPOINTS["reserve"], data=data, headers=self._dynapath_headers())
         self._log(r.text)
         j = json.loads(r.text)
         if self._result_check(j):

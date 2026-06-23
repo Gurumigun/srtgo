@@ -14,6 +14,10 @@ from discord import ui
 # 역 선택 Select Menu
 # ──────────────────────────────────────
 
+MAX_SELECT_OPTIONS = 25
+MAX_STATION_SELECTS = 5
+
+
 class StationSelect(ui.Select):
     """역 선택 드롭다운."""
 
@@ -30,19 +34,24 @@ class StationSelect(ui.Select):
 class StationSelectView(ui.View):
     """역 선택 View.
 
-    Discord Select Menu는 옵션 25개 제한이 있으므로,
-    역이 25개를 초과하면 자동으로 2개의 Select로 분할한다.
+    Discord Select Menu는 옵션 25개 제한이 있으므로 역 목록을 25개 단위로 분할한다.
     """
 
     def __init__(self, stations: list[str], placeholder: str, timeout: float = 300) -> None:
         super().__init__(timeout=timeout)
         self.selected_value: str | None = None
-        if len(stations) <= 25:
-            self.add_item(StationSelect(stations, placeholder))
-        else:
-            mid = (len(stations) + 1) // 2
-            self.add_item(StationSelect(stations[:mid], f"{placeholder} (ㄱ~ㅂ)"))
-            self.add_item(StationSelect(stations[mid:], f"{placeholder} (ㅅ~ㅎ)"))
+        chunks = [
+            stations[i:i + MAX_SELECT_OPTIONS]
+            for i in range(0, len(stations), MAX_SELECT_OPTIONS)
+        ]
+        if len(chunks) > MAX_STATION_SELECTS:
+            raise ValueError("StationSelectView supports up to 125 station options")
+
+        for index, chunk in enumerate(chunks):
+            chunk_placeholder = placeholder
+            if len(chunks) > 1:
+                chunk_placeholder = f"{placeholder} ({index + 1}/{len(chunks)})"
+            self.add_item(StationSelect(chunk, chunk_placeholder))
 
     async def on_timeout(self) -> None:
         self.selected_value = None

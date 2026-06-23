@@ -9,12 +9,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from ..core.conversation import STATIONS
 from ..ui.embeds import error_embed, favorite_routes_embed
 from ..ui.views import (
     FavoriteDeleteView,
     StationSelectView,
 )
+from srtgo.stations import STATIONS
 
 if TYPE_CHECKING:
     from ..main import SRTGoBot

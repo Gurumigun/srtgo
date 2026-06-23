@@ -73,6 +73,10 @@ class Schedule:
         self.arr_time = data.get('h_arv_tm')
 
         self.run_date = data.get('h_run_dt')
+        self.dep_station_run_order = data.get('h_dpt_stn_run_ordr', '')
+        self.arr_station_run_order = data.get('h_arv_stn_run_ordr', '')
+        self.dep_station_cons_order = data.get('h_dpt_stn_cons_ordr', '')
+        self.arr_station_cons_order = data.get('h_arv_stn_cons_ordr', '')
 
     def __repr__(self):
         dep_time = f"{self.dep_time[:2]}:{self.dep_time[2:4]}"
@@ -478,15 +482,8 @@ class Korail:
             raise KorailError(h_msg_txt, h_msg_cd)
         return True
 
-    def search_train(self, dep, arr, date=None, time=None, train_type=TrainType.ALL,
-                    passengers=None, include_no_seats=False, include_waiting_list=False):
-        kst_now = datetime.now() + timedelta(hours=9)
-        date = date or kst_now.strftime("%Y%m%d")
-        time = time or kst_now.strftime("%H%M%S")
-        passengers = passengers or [AdultPassenger()]
-        passengers = Passenger.reduce(passengers)
-
-        counts = {
+    def _passenger_counts(self, passengers):
+        return {
             'adult': sum(p.count for p in passengers if isinstance(p, AdultPassenger)),
             'child': sum(p.count for p in passengers if isinstance(p, ChildPassenger)),
             'toddler': sum(p.count for p in passengers if isinstance(p, ToddlerPassenger)),
@@ -494,6 +491,15 @@ class Korail:
             'disability1to3': sum(p.count for p in passengers if isinstance(p, Disability1To3Passenger)),
             'disability4to6': sum(p.count for p in passengers if isinstance(p, Disability4To6Passenger)),
         }
+
+    def search_train(self, dep, arr, date=None, time=None, train_type=TrainType.ALL,
+                    passengers=None, include_no_seats=False, include_waiting_list=False):
+        kst_now = datetime.now() + timedelta(hours=9)
+        date = date or kst_now.strftime("%Y%m%d")
+        time = time or kst_now.strftime("%H%M%S")
+        passengers = passengers or [AdultPassenger()]
+        passengers = Passenger.reduce(passengers)
+        counts = self._passenger_counts(passengers)
 
         data = {
             'Device': self._device,
@@ -522,7 +528,7 @@ class Korail:
             'mbCrdNo': self.membership_number
         }
 
-        r = self._session.get(API_ENDPOINTS["search_schedule"], params=data)
+        r = self._session.post(API_ENDPOINTS["search_schedule"], data=data)
         self._log(r.text)
         j = json.loads(r.text)
 
@@ -561,7 +567,8 @@ class Korail:
 
         passengers = passengers or [AdultPassenger()]
         passengers = Passenger.reduce(passengers)
-        cnt = sum(p.count for p in passengers)
+        counts = self._passenger_counts(passengers)
+        cnt = sum(counts.values())
 
         data = {
             'Device': self._device,
@@ -584,14 +591,18 @@ class Korail:
             'txtJrnyTpCd1': '11',
             'txtDptDt1': train.dep_date,
             'txtDptRsStnCd1': train.dep_code,
+            'txtDptStnConsOrdr1': train.dep_station_cons_order,
+            'txtDptStnRunOrdr1': train.dep_station_run_order,
             'txtDptTm1': train.dep_time,
             'txtArvRsStnCd1': train.arr_code,
+            'txtArvStnConsOrdr1': train.arr_station_cons_order,
+            'txtArvStnRunOrdr1': train.arr_station_run_order,
             'txtTrnNo1': train.train_no,
             'txtRunDt1': train.run_date,
             'txtTrnClsfCd1': train.train_type,
             'txtTrnGpCd1': train.train_group,
             'txtPsrmClCd1': '2' if is_special_seat else '1',
-            'txtChgFlg1': '',
+            'txtChgFlg1': 'N',
             'txtJrnySqno2': '',
             'txtJrnyTpCd2': '',
             'txtDptDt2': '',
@@ -603,12 +614,33 @@ class Korail:
             'txtTrnClsfCd2': '',
             'txtPsrmClCd2': '',
             'txtChgFlg2': '',
+            'txtCompaCnt1': counts['adult'],
+            'txtCompaCnt2': 0,
+            'txtCompaCnt3': counts['child'],
+            'txtCompaCnt4': counts['toddler'],
+            'txtCompaCnt5': counts['senior'],
+            'txtCompaCnt6': counts['disability1to3'],
+            'txtCompaCnt7': counts['disability4to6'],
+            'txtCompaCnt8': 0,
+            'txtDiscKndCd1': '000',
+            'txtDiscKndCd2': 'P11',
+            'txtDiscKndCd3': '000',
+            'txtDiscKndCd4': '321',
+            'txtDiscKndCd5': '131',
+            'txtDiscKndCd6': '111',
+            'txtDiscKndCd7': '112',
+            'txtDiscKndCd8': '173',
+            'txtPsgTpCd1': '1',
+            'txtPsgTpCd2': '1',
+            'txtPsgTpCd3': '3',
+            'txtPsgTpCd4': '3',
+            'txtPsgTpCd5': '1',
+            'txtPsgTpCd6': '1',
+            'txtPsgTpCd7': '1',
+            'txtPsgTpCd8': '1',
         }
 
-        for i, psg in enumerate(passengers, 1):
-            data.update(psg.get_dict(i))
-
-        r = self._session.get(API_ENDPOINTS["reserve"], params=data)
+        r = self._session.post(API_ENDPOINTS["reserve"], data=data)
         self._log(r.text)
         j = json.loads(r.text)
         if self._result_check(j):
@@ -667,7 +699,7 @@ class Korail:
             'Version': self._version,
             'Key': self._key,
         }
-        r = self._session.get(API_ENDPOINTS["myreservationlist"], params=data)
+        r = self._session.post(API_ENDPOINTS["myreservationlist"], data=data)
         self._log(r.text)
         j = json.loads(r.text)
         try:

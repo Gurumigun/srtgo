@@ -346,10 +346,12 @@ class BookingEngine:
         high = max(cfg.poll_interval_min, cfg.poll_interval_max)
         return uniform(low, high)
 
-    def _next_micro_break_count(self, bot: SRTGoBot) -> int:
-        """다음 미세 휴식까지의 요청 횟수 (랜덤)."""
+    def _next_micro_break_after(self, bot: SRTGoBot) -> float:
+        """다음 미세 휴식까지의 활동 시간 (랜덤, 초)."""
         cfg = bot.config
-        return randint(cfg.micro_break_interval_min, cfg.micro_break_interval_max)
+        low = min(cfg.micro_break_interval_minutes_min, cfg.micro_break_interval_minutes_max)
+        high = max(cfg.micro_break_interval_minutes_min, cfg.micro_break_interval_minutes_max)
+        return uniform(low, high) * 60
 
     def _micro_break_duration(self, bot: SRTGoBot) -> float:
         """미세 휴식 시간 (랜덤, 초)."""
@@ -388,7 +390,7 @@ class BookingEngine:
 
         매크로 회피 전략:
         1. 설정된 범위(기본 1~5초)의 균등 랜덤 대기 (요청마다)
-        2. 미세 휴식: N회 요청마다 10~45초 대기
+        2. 미세 휴식: 일정 시간 요청 후 10~30초 대기
         3. 활동/휴식 사이클: 활성 검색 → 장시간 휴식 → 반복
         4. 최대 시간 제한: 전체 검색 시간 초과 시 자동 종료
         """
@@ -402,8 +404,8 @@ class BookingEngine:
         current_active_limit = self._active_duration(bot)  # 이번 사이클 활동 시간 (±jitter)
         has_waiting = False  # 예약대기 확보 여부
         cycle_count = 0      # 현재 사이클 번호
-        requests_since_break = 0  # 미세 휴식 이후 요청 수
-        next_break_at = self._next_micro_break_count(bot)  # 다음 미세 휴식까지 요청 수
+        micro_break_start_time = time.time()
+        next_micro_break_after = self._next_micro_break_after(bot)
 
         while session.status == SessionStatus.SEARCHING:
             try:
@@ -476,23 +478,23 @@ class BookingEngine:
 
                     cycle_start_time = time.time()
                     current_active_limit = self._active_duration(bot)  # 새 사이클마다 다른 활동 시간
-                    requests_since_break = 0
-                    next_break_at = self._next_micro_break_count(bot)
+                    micro_break_start_time = time.time()
+                    next_micro_break_after = self._next_micro_break_after(bot)
 
                     if on_resume:
                         await on_resume(cycle_count + 1)
 
                 # ── 미세 휴식 확인 ──
-                requests_since_break += 1
-                if requests_since_break >= next_break_at:
+                micro_break_elapsed = time.time() - micro_break_start_time
+                if micro_break_elapsed >= next_micro_break_after:
                     break_duration = self._micro_break_duration(bot)
                     log.debug(
-                        "세션 %s: 미세 휴식 %.1f초 (%d회 요청 후)",
-                        session.session_id, break_duration, requests_since_break,
+                        "세션 %s: 미세 휴식 %.1f초 (%.1f분 활동 후)",
+                        session.session_id, break_duration, micro_break_elapsed / 60,
                     )
                     await asyncio.sleep(break_duration)
-                    requests_since_break = 0
-                    next_break_at = self._next_micro_break_count(bot)
+                    micro_break_start_time = time.time()
+                    next_micro_break_after = self._next_micro_break_after(bot)
 
                 # ── 실제 검색/예약 로직 ──
                 session.attempt_count += 1

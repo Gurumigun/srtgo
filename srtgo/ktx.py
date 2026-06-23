@@ -22,6 +22,7 @@ EMAIL_REGEX = re.compile(r"[^@]+@[^@]+\.[^@]+")
 PHONE_NUMBER_REGEX = re.compile(r"(\d{3})-(\d{3,4})-(\d{4})")
 
 USER_AGENT = "Dalvik/2.1.0 (Linux; U; Android 14; SM-S912N Build/UP1A.231005.007)"
+KORAIL_API_VERSION = "250601003"
 
 DEFAULT_HEADERS = {
     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -194,7 +195,8 @@ class Passenger:
     def reduce(passenger_list):
         if not all(isinstance(x, Passenger) for x in passenger_list):
             raise TypeError("Passengers must be based on Passenger")
-        groups = itertools.groupby(passenger_list, lambda x: x.group_key())
+        passengers = sorted(passenger_list, key=lambda x: x.group_key())
+        groups = itertools.groupby(passengers, lambda x: x.group_key())
         return list(filter(lambda x: x.count > 0, [reduce(lambda a, b: a + b, g) for k, g in groups]))
 
     def __add__(self, other):
@@ -399,7 +401,7 @@ class Korail:
         self._session = requests.session()
         self._session.headers.update(DEFAULT_HEADERS)
         self._device = 'AD'
-        self._version = '240531001'
+        self._version = KORAIL_API_VERSION
         self._key = 'korail1234567890'
         self._idx = None
         self.korail_id = korail_id
@@ -483,7 +485,7 @@ class Korail:
         return True
 
     def _passenger_counts(self, passengers):
-        return {
+        counts = {
             'adult': sum(p.count for p in passengers if isinstance(p, AdultPassenger)),
             'child': sum(p.count for p in passengers if isinstance(p, ChildPassenger)),
             'toddler': sum(p.count for p in passengers if isinstance(p, ToddlerPassenger)),
@@ -491,6 +493,8 @@ class Korail:
             'disability1to3': sum(p.count for p in passengers if isinstance(p, Disability1To3Passenger)),
             'disability4to6': sum(p.count for p in passengers if isinstance(p, Disability4To6Passenger)),
         }
+        counts['total'] = sum(counts.values())
+        return counts
 
     def search_train(self, dep, arr, date=None, time=None, train_type=TrainType.ALL,
                     passengers=None, include_no_seats=False, include_waiting_list=False):
@@ -509,23 +513,40 @@ class Korail:
             'radJobId': '1',
             'selGoTrain': train_type,
             'txtTrnGpCd': train_type,
+            'txtGoTrnNo': '',
             'txtGoStart': dep,
             'txtGoEnd': arr,
             'txtGoAbrdDt': date,
             'txtGoHour': time,
-            'txtPsgFlg_1': counts['adult'],
-            'txtPsgFlg_2': counts['child'] + counts['toddler'],
-            'txtPsgFlg_3': counts['senior'],
-            'txtPsgFlg_4': counts['disability1to3'],
-            'txtPsgFlg_5': counts['disability4to6'],
+            'txtPsgFlg_1': str(counts['adult']),
+            'txtPsgFlg_2': str(counts['child'] + counts['toddler']),
+            'txtPsgFlg_3': str(counts['senior']),
+            'txtPsgFlg_4': str(counts['disability1to3']),
+            'txtPsgFlg_5': str(counts['disability4to6']),
             'txtSeatAttCd_2': '000',
             'txtSeatAttCd_3': '000',
             'txtSeatAttCd_4': '015',
+            'txtJobDv': '',
+            'etrPath': '',
+            'tkDptDt': '',
+            'tkDptTm': '',
+            'tkTrnNo': '',
             'ebizCrossCheck': 'N',
             'srtCheckYn': 'N', # SRT 함께 보기
             'rtYn': 'N', # 왕복
             'adjStnScdlOfrFlg': 'N', # 인접역 보기
-            'mbCrdNo': self.membership_number
+            'mbCrdNo': self.membership_number or '',
+            'tkPsrmClCd': '',
+            'tkRcvdAmt': '',
+            'qryDvCd': '',
+            'qryStNo': '',
+            'qryStTrnNo': '',
+            'qryStTrnNo2': '',
+            'pgPrCnt': '',
+            'chtnCnt': '',
+            'chtnRsStnCd1': '',
+            'trnGpCnt': '',
+            'trnGpCd1': ''
         }
 
         r = self._session.post(API_ENDPOINTS["search_schedule"], data=data)
@@ -568,23 +589,25 @@ class Korail:
         passengers = passengers or [AdultPassenger()]
         passengers = Passenger.reduce(passengers)
         counts = self._passenger_counts(passengers)
-        cnt = sum(counts.values())
+        cnt = counts['total']
 
         data = {
             'Device': self._device,
             'Version': self._version,
             'Key': self._key,
+            'pnrNo': '',
             'txtMenuId': '11',
             'txtJobId': '1101' if reserving_seat else '1102',
             'txtGdNo': '',
             'hidFreeFlg': 'N',
-            'txtTotPsgCnt': cnt,
+            'txtStndFlg': 'N',
+            'pbepInfo': '',
+            'txtTotPsgCnt': str(cnt),
             'txtSeatAttCd1': '000',
             'txtSeatAttCd2': '000',
             'txtSeatAttCd3': '000',
             'txtSeatAttCd4': '015',
             'txtSeatAttCd5': '000',
-            'txtStndFlg': 'N',
             'txtSrcarCnt': '0',
             'txtJrnyCnt': '1',
             'txtJrnySqno1': '001',
@@ -614,14 +637,14 @@ class Korail:
             'txtTrnClsfCd2': '',
             'txtPsrmClCd2': '',
             'txtChgFlg2': '',
-            'txtCompaCnt1': counts['adult'],
-            'txtCompaCnt2': 0,
-            'txtCompaCnt3': counts['child'],
-            'txtCompaCnt4': counts['toddler'],
-            'txtCompaCnt5': counts['senior'],
-            'txtCompaCnt6': counts['disability1to3'],
-            'txtCompaCnt7': counts['disability4to6'],
-            'txtCompaCnt8': 0,
+            'txtCompaCnt1': str(counts['adult']),
+            'txtCompaCnt2': '0',
+            'txtCompaCnt3': str(counts['child']),
+            'txtCompaCnt4': str(counts['toddler']),
+            'txtCompaCnt5': str(counts['senior']),
+            'txtCompaCnt6': str(counts['disability1to3']),
+            'txtCompaCnt7': str(counts['disability4to6']),
+            'txtCompaCnt8': '0',
             'txtDiscKndCd1': '000',
             'txtDiscKndCd2': 'P11',
             'txtDiscKndCd3': '000',
